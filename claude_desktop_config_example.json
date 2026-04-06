@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "esp32": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:\\Users\\sasaki.yusuke\\144Lab\\0079_MCP",
+        "run",
+        "mcp-esp32"
+      ]
+    }
+  }
+}

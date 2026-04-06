@@ -58,7 +58,7 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
       "command": "uv",
       "args": [
         "--directory",
-        "C:\\Users\\sasaki.yusuke\\144Lab\\0079_MCP",
+        "C:\\mcp-micropython",
         "run",
         "mcp-micropython"
       ]
@@ -78,6 +78,10 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_eval` | 式を評価して値を返す |
 | `micropython_get_info` | デバイス情報取得 |
 | `micropython_reset` | ソフトリセット |
+| `micropython_interrupt` | Ctrl-C を送って実行中の処理を中断 |
+| `micropython_serial_read` | 一定時間ぶんのシリアル出力を読む |
+| `micropython_serial_read_until` | 特定文字列が出るまで待つ |
+| `micropython_reset_and_capture` | ボードをリセットして起動ログを取得 |
 | `micropython_list_files` | ファイル一覧 |
 | `micropython_read_file` | ファイル読み出し |
 | `micropython_write_file` | ファイル書き込み |

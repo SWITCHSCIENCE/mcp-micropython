@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "C:\\Users\\sasaki.yusuke\\144Lab\\0079_MCP",
+        "C:\\mcp-micropython",
         "run",
         "mcp-micropython"
       ]

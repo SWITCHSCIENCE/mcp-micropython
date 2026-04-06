@@ -86,3 +86,42 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_read_file` | ファイル読み出し |
 | `micropython_write_file` | ファイル書き込み |
 | `micropython_delete_file` | ファイル削除 |
+| `micropython_get_hardware_profile_template` | ハードウェア構成のテンプレート取得 |
+| `micropython_read_hardware_profile` | ハードウェア構成の読み出し |
+| `micropython_write_hardware_profile` | ハードウェア構成の書き込み |
+
+## ハードウェア構成
+
+デバイス側に `/hardware_profile.txt` として、接続されている部品や GPIO 割り当てを書いておけます。
+LLM はこのファイルを読んでから制御コードを考えることで、配線ミスや前提違いを減らしやすくなります。
+
+初回は `micropython_get_hardware_profile_template` でテンプレートを取得し、
+内容を埋めて `micropython_write_hardware_profile` で保存し、
+必要に応じて `micropython_read_hardware_profile` で読み出す想定です。
+
+テンプレート例:
+
+```text
+board:
+firmware:
+purpose:
+
+pins:
+- GPIOxx:
+
+buses:
+- I2C:
+- SPI:
+- UART:
+
+peripherals:
+- name:
+  connection:
+  address:
+
+constraints:
+- 
+
+notes:
+- 
+```

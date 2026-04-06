@@ -20,7 +20,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from .serial_manager import SerialManager
-from .tools import device, execution, filesystem
+from .tools import device, execution, filesystem, hardware
 
 # MCP サーバーインスタンス
 mcp = FastMCP(
@@ -44,6 +44,7 @@ def _register_tools() -> None:
     device.register(mcp, _manager)
     execution.register(mcp, _manager)
     filesystem.register(mcp, _manager)
+    hardware.register(mcp, _manager)
 
 
 def main() -> None:

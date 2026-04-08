@@ -5,7 +5,7 @@ MicroPython REPL への MCP ブリッジサーバー。
 Claude Desktop, Codex (VSCode), Copilot (VSCode), Antigravity などの MCP クライアントから、
 USB Serial 経由で MicroPython (ESP32, RP2040, etc.) を操作できます。
 
-`HARDWARE.md` を単なる配線メモではなく、デバイス上の再利用可能な helper module への案内役として育てていく運用を想定しています。たとえばサーボ操作の依頼が来たら、その場限りのコード片で済ませるのではなく、小さなライブラリをデバイス上に作成し、`HARDWARE.md` に 1 行の使い方を追記して、次回以降はその helper を再利用する形を推奨します。
+`HARDWARE.md` を単なる配線メモではなく、将来のセッションが再利用するためのボード固有ドキュメントとして育てていく運用を想定しています。たとえばサーボ操作の依頼が来たら、その場限りのコード片で済ませるのではなく、小さな helper module をデバイス上に作成し、今後の使い方や前提が増えたときだけ `HARDWARE.md` に短い利用メモを追記して、次回以降はその helper を再利用する形を推奨します。
 
 ## セットアップ
 
@@ -74,6 +74,7 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | リソース | 説明 |
 |---|---|
 | `micropython://guide/recipes` | よくある作業の進め方 |
+| `micropython://policy/hardware-docs` | `HARDWARE.md` を更新すべき条件 |
 | `micropython://guide/troubleshooting` | よくある問題の復旧手順 |
 | `micropython://guide/limitations` | 既知の制約一覧 |
 

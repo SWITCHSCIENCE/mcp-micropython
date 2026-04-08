@@ -7,8 +7,9 @@ Use these short recipes as starting points for common tasks.
 - Treat `HARDWARE.md` as the board-specific guide.
 - Use documented helper modules or board APIs first.
 - If new behavior is needed, add or extend a small reusable helper module instead of leaving a one-off script.
-- After adding a helper, add a one-line usage note to `HARDWARE.md` so future sessions can find it.
+- If the task changes reusable board-specific behavior or assumptions, follow `micropython://policy/hardware-docs` before considering the task complete.
 - Only fall back to direct `machine.Pin`, `I2C`, `SPI`, or `UART` access when no supported path is documented.
+- Read `/boot.py` and `/main.py` before modifying either file.
 
 ## List available ports
 
@@ -38,7 +39,7 @@ Use these short recipes as starting points for common tasks.
 2. If a supported helper exists, use it.
 3. If not, implement the behavior as a small helper module or extend an existing one.
 4. Verify with a short explicit call.
-5. Add a short `HARDWARE.md` entry that says where the helper lives and shows a one-line example.
+5. If the change affects future board usage, update `HARDWARE.md` according to `micropython://policy/hardware-docs`.
 
 ## Recover from a hang
 

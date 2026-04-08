@@ -29,6 +29,16 @@ def register(mcp: FastMCP) -> None:
         return _read_guide("recipes.md")
 
     @mcp.resource(
+        "micropython://policy/hardware-docs",
+        name="micropython_policy_hardware_docs",
+        title="MicroPython HARDWARE.md policy",
+        description="Completion policy for when HARDWARE.md should be updated after board-specific changes.",
+        mime_type="text/markdown",
+    )
+    def hardware_docs_policy() -> str:
+        return _read_guide("hardware_docs_policy.md")
+
+    @mcp.resource(
         "micropython://guide/troubleshooting",
         name="micropython_guide_troubleshooting",
         title="MicroPython MCP troubleshooting",

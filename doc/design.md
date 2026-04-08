@@ -52,6 +52,17 @@ flowchart LR
 
 ---
 
+## 静的リソース方針
+
+- `micropython://guide/recipes`: よくある作業の進め方
+- `micropython://policy/hardware-docs`: `HARDWARE.md` を更新すべき条件
+- `micropython://guide/troubleshooting`: よくある問題の復旧手順
+- `micropython://guide/limitations`: 既知の制約一覧
+
+`HARDWARE.md` の更新判断は「ライブラリを追加したかどうか」ではなく、「将来のセッションが再利用すべきボード固有知識が増えたか」を基準にする。
+
+---
+
 ## MCPツール一覧（提供する機能）
 
 | ツール名 | 説明 | 主なパラメータ |

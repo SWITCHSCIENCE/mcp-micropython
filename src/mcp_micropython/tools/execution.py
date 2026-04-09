@@ -8,16 +8,31 @@ MCP ツール:
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from mcp.server.fastmcp import FastMCP
 
 from ..serial_manager import NotConnectedError, SerialManager
+
+
+class ExecResult(TypedDict):
+    ok: bool
+    stdout: str
+    stderr: str
+    error: str | None
+
+
+class EvalResult(TypedDict):
+    ok: bool
+    result: str
+    error: str | None
 
 
 def register(mcp: FastMCP, manager: SerialManager) -> None:
     """コード実行ツールを MCP サーバーに登録する。"""
 
     @mcp.tool()
-    def micropython_exec(code: str, timeout: int = 10) -> str:
+    def micropython_exec(code: str, timeout: int = 10) -> ExecResult:
         """
         MicroPython インタープリタで Python コードを実行する。
         複数行のコードも実行できる。
@@ -35,22 +50,19 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         try:
             result = manager.exec_code(code, timeout=float(timeout))
         except NotConnectedError as e:
-            return f"✗ {e}"
+            return {"ok": False, "stdout": "", "stderr": "", "error": str(e)}
         except Exception as e:
-            return f"✗ 実行エラー: {e}"
+            return {"ok": False, "stdout": "", "stderr": "", "error": str(e)}
 
-        if result.ok:
-            output = result.stdout.strip()
-            return output if output else "(出力なし)"
-        else:
-            parts = []
-            if result.stdout.strip():
-                parts.append(f"[stdout]\n{result.stdout.strip()}")
-            parts.append(f"[stderr]\n{result.stderr.strip()}")
-            return "\n".join(parts)
+        return {
+            "ok": result.ok,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "error": None if result.ok else (result.stderr.strip() or "execution failed"),
+        }
 
     @mcp.tool()
-    def micropython_eval(expression: str) -> str:
+    def micropython_eval(expression: str) -> EvalResult:
         """
         MicroPython ボードで式を評価し、結果を文字列で返す。
 
@@ -63,11 +75,15 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         try:
             result = manager.eval_expr(expression)
         except NotConnectedError as e:
-            return f"✗ {e}"
+            return {"ok": False, "result": "", "error": str(e)}
         except Exception as e:
-            return f"✗ 評価エラー: {e}"
+            return {"ok": False, "result": "", "error": str(e)}
 
         if result.ok:
-            return result.stdout.strip()
+            return {"ok": True, "result": result.stdout.strip(), "error": None}
         else:
-            return f"✗ エラー:\n{result.stderr.strip()}"
+            return {
+                "ok": False,
+                "result": "",
+                "error": result.stderr.strip() or "evaluation failed",
+            }

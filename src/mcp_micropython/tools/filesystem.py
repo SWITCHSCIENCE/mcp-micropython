@@ -16,6 +16,8 @@ Note:
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from mcp.server.fastmcp import FastMCP
 
 from ..serial_manager import NotConnectedError, SerialManager
@@ -23,10 +25,46 @@ from ..serial_manager import NotConnectedError, SerialManager
 HARDWARE_MD_PATH = "/HARDWARE.md"
 
 
+class FileEntry(TypedDict):
+    name: str
+    path: str
+    kind: str
+    size_bytes: int | None
+
+
+class ListFilesResult(TypedDict):
+    ok: bool
+    path: str
+    entries: list[FileEntry]
+    error: str | None
+
+
+class ReadFileResult(TypedDict):
+    ok: bool
+    path: str
+    content: str
+    size_bytes: int
+    error: str | None
+
+
+class WriteFileResult(TypedDict):
+    ok: bool
+    path: str
+    mode: str
+    bytes_written: int
+    error: str | None
+
+
+class DeleteFileResult(TypedDict):
+    ok: bool
+    path: str
+    error: str | None
+
+
 def register(mcp: FastMCP, manager: SerialManager) -> None:
     """ファイルシステムツールを MCP サーバーに登録する。"""
 
-    def _write_text_file(path: str, content: str, mode: str, timeout: float) -> str:
+    def _write_text_file(path: str, content: str, mode: str, timeout: float) -> WriteFileResult:
         code = f"""\
 try:
     with open({path!r}, {mode!r}) as f:
@@ -38,19 +76,48 @@ except Exception as e:
         try:
             result = manager.exec_code(code, timeout=timeout)
         except NotConnectedError as e:
-            return f"エラー: {e}"
+            return {
+                "ok": False,
+                "path": path,
+                "mode": mode,
+                "bytes_written": 0,
+                "error": str(e),
+            }
         except Exception as e:
-            return f"エラー: {e}"
+            return {
+                "ok": False,
+                "path": path,
+                "mode": mode,
+                "bytes_written": 0,
+                "error": str(e),
+            }
 
         if not result.ok:
-            return f"エラー:\n{result.stderr}"
+            return {
+                "ok": False,
+                "path": path,
+                "mode": mode,
+                "bytes_written": 0,
+                "error": result.stderr.strip() or "write file failed",
+            }
         if result.stdout.strip() == "OK":
-            action = "書き込み" if mode == "w" else "追記"
-            return f"OK: {path} に{action}ました。"
-        return f"エラー: {result.stdout}"
+            return {
+                "ok": True,
+                "path": path,
+                "mode": mode,
+                "bytes_written": len(content.encode("utf-8")),
+                "error": None,
+            }
+        return {
+            "ok": False,
+            "path": path,
+            "mode": mode,
+            "bytes_written": 0,
+            "error": result.stdout.strip() or "write file failed",
+        }
 
     @mcp.tool()
-    def micropython_list_files(path: str = "/") -> str:
+    def micropython_list_files(path: str = "/") -> ListFilesResult:
         """
         MicroPython ボードのファイルシステム上のファイル/ディレクトリを一覧表示する。
 
@@ -77,17 +144,65 @@ except Exception as e:
         try:
             result = manager.exec_code(code, timeout=5.0)
         except NotConnectedError as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "entries": [], "error": str(e)}
         except Exception as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "entries": [], "error": str(e)}
 
         if not result.ok:
-            return f"エラー:\n{result.stderr}"
-        output = result.stdout.strip()
-        return output if output else f"{path} は空です。"
+            return {
+                "ok": False,
+                "path": path,
+                "entries": [],
+                "error": result.stderr.strip() or "list files failed",
+            }
+
+        entries: list[FileEntry] = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("ERROR:"):
+                return {
+                    "ok": False,
+                    "path": path,
+                    "entries": [],
+                    "error": line[len("ERROR:") :].strip(),
+                }
+            if line.startswith("? "):
+                full_path = line[2:].strip()
+                entries.append(
+                    {
+                        "name": full_path.rsplit("/", 1)[-1],
+                        "path": full_path,
+                        "kind": "unknown",
+                        "size_bytes": None,
+                    }
+                )
+                continue
+
+            parts = line.split(maxsplit=2)
+            if len(parts) != 3:
+                continue
+
+            kind_code, size_text, full_path = parts
+            entries.append(
+                {
+                    "name": full_path.rsplit("/", 1)[-1],
+                    "path": full_path,
+                    "kind": "dir" if kind_code == "D" else "file",
+                    "size_bytes": int(size_text),
+                }
+            )
+
+        return {
+            "ok": True,
+            "path": path,
+            "entries": entries,
+            "error": None,
+        }
 
     @mcp.tool()
-    def micropython_read_file(path: str) -> str:
+    def micropython_read_file(path: str) -> ReadFileResult:
         """
         MicroPython ボードのファイルを読み出して返す。
 
@@ -104,18 +219,36 @@ except Exception as e:
         try:
             result = manager.exec_code(code, timeout=5.0)
         except NotConnectedError as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "content": "", "size_bytes": 0, "error": str(e)}
         except Exception as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "content": "", "size_bytes": 0, "error": str(e)}
 
         if not result.ok:
-            return f"エラー:\n{result.stderr}"
+            return {
+                "ok": False,
+                "path": path,
+                "content": "",
+                "size_bytes": 0,
+                "error": result.stderr.strip() or "read file failed",
+            }
         if result.stdout.startswith("ERROR:"):
-            return f"エラー: {result.stdout}"
-        return result.stdout
+            return {
+                "ok": False,
+                "path": path,
+                "content": "",
+                "size_bytes": 0,
+                "error": result.stdout[len("ERROR:") :].strip(),
+            }
+        return {
+            "ok": True,
+            "path": path,
+            "content": result.stdout,
+            "size_bytes": len(result.stdout.encode("utf-8")),
+            "error": None,
+        }
 
     @mcp.tool()
-    def micropython_read_hardware_md() -> str:
+    def micropython_read_hardware_md() -> ReadFileResult:
         """
         デバイス上の /HARDWARE.md を読み出して返す。
         GPIO 割り当てや接続部品の前提確認用のショートカット。
@@ -130,18 +263,48 @@ except Exception as e:
         try:
             result = manager.exec_code(code, timeout=5.0)
         except NotConnectedError as e:
-            return f"エラー: {e}"
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "size_bytes": 0,
+                "error": str(e),
+            }
         except Exception as e:
-            return f"エラー: {e}"
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "size_bytes": 0,
+                "error": str(e),
+            }
 
         if not result.ok:
-            return f"エラー:\n{result.stderr}"
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "size_bytes": 0,
+                "error": result.stderr.strip() or "read file failed",
+            }
         if result.stdout.startswith("ERROR:"):
-            return f"エラー: {result.stdout}"
-        return result.stdout
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "size_bytes": 0,
+                "error": result.stdout[len("ERROR:") :].strip(),
+            }
+        return {
+            "ok": True,
+            "path": HARDWARE_MD_PATH,
+            "content": result.stdout,
+            "size_bytes": len(result.stdout.encode("utf-8")),
+            "error": None,
+        }
 
     @mcp.tool()
-    def micropython_write_file(path: str, content: str) -> str:
+    def micropython_write_file(path: str, content: str) -> WriteFileResult:
         """
         MicroPython ボードのファイルに内容を書き込む（上書き）。
 
@@ -157,7 +320,7 @@ except Exception as e:
         return _write_text_file(path=path, content=content, mode="w", timeout=10.0)
 
     @mcp.tool()
-    def micropython_append_file(path: str, content: str) -> str:
+    def micropython_append_file(path: str, content: str) -> WriteFileResult:
         """
         MicroPython ボードのファイルに内容を追記する。
 
@@ -172,7 +335,7 @@ except Exception as e:
         return _write_text_file(path=path, content=content, mode="a", timeout=10.0)
 
     @mcp.tool()
-    def micropython_delete_file(path: str) -> str:
+    def micropython_delete_file(path: str) -> DeleteFileResult:
         """
         MicroPython ボード上のファイルを削除する。
 
@@ -190,12 +353,20 @@ except Exception as e:
         try:
             result = manager.exec_code(code, timeout=5.0)
         except NotConnectedError as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "error": str(e)}
         except Exception as e:
-            return f"エラー: {e}"
+            return {"ok": False, "path": path, "error": str(e)}
 
         if not result.ok:
-            return f"エラー:\n{result.stderr}"
+            return {
+                "ok": False,
+                "path": path,
+                "error": result.stderr.strip() or "delete file failed",
+            }
         if result.stdout.strip() == "OK":
-            return f"OK: {path} を削除しました。"
-        return f"エラー: {result.stdout}"
+            return {"ok": True, "path": path, "error": None}
+        return {
+            "ok": False,
+            "path": path,
+            "error": result.stdout.strip() or "delete file failed",
+        }

@@ -11,6 +11,8 @@ MCP ツール:
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from mcp.server.fastmcp import FastMCP
 
 from ..serial_manager import SerialManager
@@ -42,25 +44,119 @@ for k, v in info.items():
 """
 
 
+class DeviceInfo(TypedDict, total=False):
+    platform: str
+    version: str
+    implementation: str
+    free_mem: int
+    alloc_mem: int
+    freq_mhz: int
+    fs_total_kb: int
+    fs_free_kb: int
+
+
+class GetInfoResult(TypedDict):
+    ok: bool
+    info: DeviceInfo
+    error: str | None
+
+
+class SerialPortInfo(TypedDict):
+    port: str
+    description: str
+    hwid: str
+
+
+class ListPortsResult(TypedDict):
+    ok: bool
+    ports: list[SerialPortInfo]
+    error: str | None
+
+
+class ConnectionResult(TypedDict):
+    ok: bool
+    port: str
+    baudrate: int
+    error: str | None
+
+
+class DisconnectResult(TypedDict):
+    ok: bool
+    error: str | None
+
+
+class ActionResult(TypedDict):
+    ok: bool
+    error: str | None
+
+
+class SerialReadResult(TypedDict):
+    ok: bool
+    stdout: str
+    truncated: bool
+    bytes_read: int
+    error: str | None
+
+
+class SerialReadUntilResult(TypedDict):
+    ok: bool
+    matched: bool
+    stdout: str
+    bytes_read: int
+    error: str | None
+
+
+class ResetCaptureResult(TypedDict):
+    ok: bool
+    stdout: str
+    reset_ok: bool
+    truncated: bool
+    error: str | None
+
+
+def _parse_info_value(raw_value: str) -> str | int:
+    raw_value = raw_value.strip()
+    try:
+        return int(raw_value)
+    except ValueError:
+        return raw_value
+
+
+def _parse_device_info(stdout: str) -> DeviceInfo:
+    info: DeviceInfo = {}
+    for line in stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        info[key] = _parse_info_value(value)
+    return info
+
+
 def register(mcp: FastMCP, manager: SerialManager) -> None:
     """デバイス関連ツールを MCP サーバーに登録する。"""
 
     @mcp.tool()
-    def micropython_list_ports() -> str:
+    def micropython_list_ports() -> ListPortsResult:
         """
         接続可能な USB シリアルポートを一覧表示する。
         MicroPython ボードを接続した後にこのツールを呼んで COM ポート名を確認してください。
         """
         ports = manager.list_ports()
-        if not ports:
-            return "シリアルポートが見つかりません。MicroPython ボードが接続されているか確認してください。"
-        lines = ["利用可能なシリアルポート:"]
-        for p in ports:
-            lines.append(f"  {p['port']} — {p['description']} ({p['hwid']})")
-        return "\n".join(lines)
+        return {
+            "ok": True,
+            "ports": [
+                {
+                    "port": p["port"],
+                    "description": p["description"],
+                    "hwid": p["hwid"],
+                }
+                for p in ports
+            ],
+            "error": None,
+        }
 
     @mcp.tool()
-    def micropython_connect(port: str, baudrate: int = 115200) -> str:
+    def micropython_connect(port: str, baudrate: int = 115200) -> ConnectionResult:
         """
         指定した COM ポートの MicroPython ボードに接続する。
 
@@ -70,20 +166,36 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         """
         try:
             manager.connect(port, baudrate)
-            return f"✓ {port} ({baudrate} bps) に接続しました。"
+            return {
+                "ok": True,
+                "port": port,
+                "baudrate": baudrate,
+                "error": None,
+            }
         except Exception as e:
-            return f"✗ 接続失敗: {e}"
+            return {
+                "ok": False,
+                "port": port,
+                "baudrate": baudrate,
+                "error": str(e),
+            }
 
     @mcp.tool()
-    def micropython_disconnect() -> str:
+    def micropython_disconnect() -> DisconnectResult:
         """MicroPython ボードのシリアル接続を切断する。"""
         if not manager.is_connected:
-            return "既に切断されています。"
+            return {
+                "ok": True,
+                "error": None,
+            }
         manager.disconnect()
-        return "✓ 接続を切断しました。"
+        return {
+            "ok": True,
+            "error": None,
+        }
 
     @mcp.tool()
-    def micropython_get_info() -> str:
+    def micropython_get_info() -> GetInfoResult:
         """
         MicroPython ボードのデバイス情報を取得する。
         (MicroPython バージョン・空きメモリ・フラッシュ使用量・CPU周波数 など)
@@ -91,13 +203,25 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         try:
             result = manager.exec_code(_GET_INFO_CODE, timeout=5.0)
             if not result.ok:
-                return f"エラー:\n{result.stderr}"
-            return f"デバイス情報:\n{result.stdout}"
+                return {
+                    "ok": False,
+                    "info": {},
+                    "error": result.stderr.strip() or "device info command failed",
+                }
+            return {
+                "ok": True,
+                "info": _parse_device_info(result.stdout),
+                "error": None,
+            }
         except Exception as e:
-            return f"取得失敗: {e}"
+            return {
+                "ok": False,
+                "info": {},
+                "error": str(e),
+            }
 
     @mcp.tool()
-    def micropython_reset() -> str:
+    def micropython_reset() -> ActionResult:
         """
         MicroPython ボードをソフトリセットする (machine.reset() に相当)。
         リセット後は再接続が必要です。
@@ -110,25 +234,25 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
             except Exception:
                 pass
             manager.disconnect()
-            return "✓ リセットしました。再接続するには micropython_connect を使用してください。"
+            return {"ok": True, "error": None}
         except Exception as e:
-            return f"リセット失敗: {e}"
+            return {"ok": False, "error": str(e)}
 
     @mcp.tool()
-    def micropython_interrupt() -> str:
+    def micropython_interrupt() -> ActionResult:
         """Ctrl-C を送って実行中の処理を中断する。"""
         try:
             manager.interrupt()
-            return "✓ Ctrl-C を送信しました。"
+            return {"ok": True, "error": None}
         except Exception as e:
-            return f"中断失敗: {e}"
+            return {"ok": False, "error": str(e)}
 
     @mcp.tool()
     def micropython_serial_read(
         duration: float,
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
-    ) -> dict:
+    ) -> SerialReadResult:
         try:
             result = manager.serial_read(
                 duration=duration,
@@ -136,12 +260,15 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
                 max_bytes=max_bytes,
             )
             return {
+                "ok": True,
                 "stdout": result["stdout"],
                 "truncated": result["truncated"],
                 "bytes_read": result["bytes_read"],
+                "error": None,
             }
         except Exception as e:
             return {
+                "ok": False,
                 "stdout": "",
                 "truncated": False,
                 "bytes_read": 0,
@@ -153,7 +280,7 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         pattern: str,
         timeout: float,
         max_bytes: int | None = None,
-    ) -> dict:
+    ) -> SerialReadUntilResult:
         try:
             result = manager.serial_read_until(
                 pattern=pattern,
@@ -161,12 +288,15 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
                 max_bytes=max_bytes,
             )
             return {
+                "ok": True,
                 "matched": result["matched"],
                 "stdout": result["stdout"],
                 "bytes_read": result["bytes_read"],
+                "error": None,
             }
         except Exception as e:
             return {
+                "ok": False,
                 "matched": False,
                 "stdout": "",
                 "bytes_read": 0,
@@ -178,7 +308,7 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         capture_duration: float,
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
-    ) -> dict:
+    ) -> ResetCaptureResult:
         try:
             result = manager.reset_and_capture(
                 capture_duration=capture_duration,
@@ -186,12 +316,15 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
                 max_bytes=max_bytes,
             )
             return {
+                "ok": True,
                 "stdout": result["stdout"],
                 "reset_ok": result["reset_ok"],
                 "truncated": result["truncated"],
+                "error": None,
             }
         except Exception as e:
             return {
+                "ok": False,
                 "stdout": "",
                 "reset_ok": False,
                 "truncated": False,

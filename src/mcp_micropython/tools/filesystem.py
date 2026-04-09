@@ -6,11 +6,12 @@ MCP ツール:
   - micropython_read_file      : ファイル内容の読み出し
   - micropython_read_hardware_md : デバイス上の /HARDWARE.md を読む
   - micropython_write_file     : ファイルへの書き込み
+  - micropython_append_file    : ファイルへの追記
   - micropython_delete_file    : ファイルの削除
 
 Note:
     大容量ファイル転送は Raw REPL の制約で失敗する場合がある。
-    数 KB を超える場合は分割転送の検討が必要。
+    数 KB を超える場合は write_file で空にしてから append_file で分割追記する。
 """
 
 from __future__ import annotations
@@ -24,6 +25,29 @@ HARDWARE_MD_PATH = "/HARDWARE.md"
 
 def register(mcp: FastMCP, manager: SerialManager) -> None:
     """ファイルシステムツールを MCP サーバーに登録する。"""
+
+    def _write_text_file(path: str, content: str, mode: str, timeout: float) -> str:
+        code = f"""\
+try:
+    with open({path!r}, {mode!r}) as f:
+        f.write({content!r})
+    print('OK')
+except Exception as e:
+    print(f'ERROR: {{e}}')
+"""
+        try:
+            result = manager.exec_code(code, timeout=timeout)
+        except NotConnectedError as e:
+            return f"エラー: {e}"
+        except Exception as e:
+            return f"エラー: {e}"
+
+        if not result.ok:
+            return f"エラー:\n{result.stderr}"
+        if result.stdout.strip() == "OK":
+            action = "書き込み" if mode == "w" else "追記"
+            return f"OK: {path} に{action}ました。"
+        return f"エラー: {result.stdout}"
 
     @mcp.tool()
     def micropython_list_files(path: str = "/") -> str:
@@ -127,27 +151,25 @@ except Exception as e:
 
         Note:
             大容量ファイル (数 KB 以上) は Raw REPL の制約により失敗する場合がある。
+            その場合は小さいチャンクに分け、最初にこのツールで空文字または先頭チャンクを書き、
+            続けて micropython_append_file で追記する。
         """
-        code = f"""\
-try:
-    with open({path!r}, 'w') as f:
-        f.write({content!r})
-    print('OK')
-except Exception as e:
-    print(f'ERROR: {{e}}')
-"""
-        try:
-            result = manager.exec_code(code, timeout=10.0)
-        except NotConnectedError as e:
-            return f"エラー: {e}"
-        except Exception as e:
-            return f"エラー: {e}"
+        return _write_text_file(path=path, content=content, mode="w", timeout=10.0)
 
-        if not result.ok:
-            return f"エラー:\n{result.stderr}"
-        if result.stdout.strip() == "OK":
-            return f"OK: {path} に書き込みました。"
-        return f"エラー: {result.stdout}"
+    @mcp.tool()
+    def micropython_append_file(path: str, content: str) -> str:
+        """
+        MicroPython ボードのファイルに内容を追記する。
+
+        Args:
+            path: 追記先ファイルのパス (例: "/main.py")
+            content: 追記する内容 (テキスト)
+
+        Note:
+            大きい内容を書き込むときは、content を小さいチャンクに分けて
+            このツールを複数回呼ぶことで転送しやすくなる。
+        """
+        return _write_text_file(path=path, content=content, mode="a", timeout=10.0)
 
     @mcp.tool()
     def micropython_delete_file(path: str) -> str:

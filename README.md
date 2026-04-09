@@ -97,4 +97,5 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_read_file` | ファイル読み出し |
 | `micropython_read_hardware_md` | `/HARDWARE.md` を読み出し |
 | `micropython_write_file` | ファイル書き込み |
+| `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |

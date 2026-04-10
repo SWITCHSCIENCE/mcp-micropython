@@ -12,7 +12,7 @@ from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from ..serial_manager import NotConnectedError, SerialManager
+from ..session_manager import NotConnectedError, SessionManager
 
 
 class ExecResult(TypedDict):
@@ -28,7 +28,7 @@ class EvalResult(TypedDict):
     error: str | None
 
 
-def register(mcp: FastMCP, manager: SerialManager) -> None:
+def register(mcp: FastMCP, manager: SessionManager) -> None:
     """コード実行ツールを MCP サーバーに登録する。"""
 
     @mcp.tool()

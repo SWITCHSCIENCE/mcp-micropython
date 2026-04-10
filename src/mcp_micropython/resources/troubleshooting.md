@@ -3,8 +3,9 @@
 ## Cannot connect
 
 - Confirm the board is powered and visible in `micropython_list_ports`.
-- Check that the selected port is the correct one.
+- Check that the selected serial port or `host[:port]` target is the correct one.
 - Close other software that may already hold the serial port.
+- For WebREPL, verify the password and that the board is already on Wi-Fi.
 
 ## REPL does not respond
 
@@ -16,6 +17,11 @@
 
 - A reset can drop the current serial session.
 - Reconnect before reading files or running code again.
+
+## `micropython_reset_and_capture` fails
+
+- This tool only works for serial sessions.
+- For WebREPL sessions, reconnect after reset instead of using startup-log capture.
 
 ## Long code execution is unstable
 

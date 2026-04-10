@@ -20,7 +20,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from . import static_resources
-from .serial_manager import SerialManager
+from .session_manager import SessionManager
 from .tools import device, execution, filesystem
 
 mcp = FastMCP(
@@ -39,7 +39,7 @@ mcp = FastMCP(
 """,
 )
 
-_manager = SerialManager()
+_manager = SessionManager()
 
 
 def _register_tools() -> None:

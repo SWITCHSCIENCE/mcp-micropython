@@ -1,21 +1,16 @@
 """
-device.py — 接続管理・デバイス情報ツール
-
-MCP ツール:
-  - micropython_list_ports   : 利用可能なシリアルポート一覧
-  - micropython_connect      : 指定ポートに接続
-  - micropython_disconnect   : 接続を切断
-  - micropython_get_info     : デバイス情報取得 (チップ情報・空きメモリ等)
-  - micropython_reset        : ソフトリセット
+device.py — connection and device tools.
 """
 
 from __future__ import annotations
 
+import textwrap
 from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from ..serial_manager import SerialManager
+from ..session_manager import SessionManager
+from ..transport import UnsupportedOperationError
 
 # デバイス情報取得コード (MicroPython上で実行)
 _GET_INFO_CODE = """\
@@ -75,8 +70,11 @@ class ListPortsResult(TypedDict):
 
 class ConnectionResult(TypedDict):
     ok: bool
-    port: str
-    baudrate: int
+    target: str
+    transport: str | None
+    baudrate: int | None
+    host: str | None
+    port: int | str | None
     error: str | None
 
 
@@ -87,6 +85,17 @@ class DisconnectResult(TypedDict):
 
 class ActionResult(TypedDict):
     ok: bool
+    error: str | None
+
+
+class ConnectionStatusResult(TypedDict):
+    ok: bool
+    connected: bool
+    transport: str | None
+    target: str | None
+    host: str | None
+    port: int | str | None
+    baudrate: int | None
     error: str | None
 
 
@@ -114,6 +123,17 @@ class ResetCaptureResult(TypedDict):
     error: str | None
 
 
+class BootstrapResult(TypedDict):
+    ok: bool
+    ip: str
+    boot_updated: bool
+    error: str | None
+
+
+BOOT_BLOCK_START = "# >>> MCP-WEBREPL BEGIN >>>"
+BOOT_BLOCK_END = "# <<< MCP-WEBREPL END <<<"
+
+
 def _parse_info_value(raw_value: str) -> str | int:
     raw_value = raw_value.strip()
     try:
@@ -132,7 +152,75 @@ def _parse_device_info(stdout: str) -> DeviceInfo:
     return info
 
 
-def register(mcp: FastMCP, manager: SerialManager) -> None:
+def _read_remote_text(manager: SessionManager, path: str, timeout: float = 5.0) -> str:
+    code = f"""\ntry:\n    with open({path!r}, 'r') as f:\n        print(f.read(), end='')\nexcept OSError:\n    pass\n"""
+    result = manager.exec_code(code, timeout=timeout)
+    if not result.ok:
+        raise RuntimeError(result.stderr.strip() or f"failed to read {path}")
+    return result.stdout
+
+
+def _write_remote_text(manager: SessionManager, path: str, content: str, timeout: float = 10.0) -> None:
+    code = f"""\ntry:\n    with open({path!r}, 'w') as f:\n        f.write({content!r})\n    print('OK')\nexcept Exception as e:\n    print(f'ERROR: {{e}}')\n"""
+    result = manager.exec_code(code, timeout=timeout)
+    if not result.ok:
+        raise RuntimeError(result.stderr.strip() or f"failed to write {path}")
+    if result.stdout.strip() != "OK":
+        raise RuntimeError(result.stdout.strip() or f"failed to write {path}")
+
+
+def _render_boot_block(ssid: str, wifi_password: str, webrepl_password: str) -> str:
+    block = f"""
+{BOOT_BLOCK_START}
+try:
+    import network
+    import time
+    _mcp_sta = network.WLAN(network.STA_IF)
+    if not _mcp_sta.active():
+        _mcp_sta.active(True)
+    if _mcp_sta.isconnected():
+        _mcp_sta.disconnect()
+        time.sleep_ms(200)
+    _mcp_sta.connect({ssid!r}, {wifi_password!r})
+    _mcp_deadline = time.ticks_add(time.ticks_ms(), 15000)
+    while not _mcp_sta.isconnected():
+        if time.ticks_diff(_mcp_deadline, time.ticks_ms()) <= 0:
+            raise RuntimeError("Wi-Fi connect timeout")
+        time.sleep_ms(200)
+    import webrepl
+    webrepl.start(password={webrepl_password!r})
+except Exception as e:
+    print("MCP WebREPL bootstrap failed:", e)
+{BOOT_BLOCK_END}
+""".strip()
+    return textwrap.dedent(block)
+
+
+def _merge_boot_content(existing: str, managed_block: str) -> str:
+    if BOOT_BLOCK_START in existing and BOOT_BLOCK_END in existing:
+        before, _, remainder = existing.partition(BOOT_BLOCK_START)
+        _, _, after = remainder.partition(BOOT_BLOCK_END)
+        merged = before.rstrip()
+        if merged:
+            merged += "\n\n"
+        merged += managed_block.rstrip()
+        preserved_after = after.lstrip("\r\n")
+        if preserved_after:
+            merged += "\n\n" + preserved_after.rstrip()
+        return merged.rstrip() + "\n"
+
+    stripped = existing.rstrip()
+    if stripped:
+        stripped += "\n\n"
+    stripped += managed_block.rstrip() + "\n"
+    return stripped
+
+
+def _bootstrap_probe_code(ssid: str, wifi_password: str, webrepl_password: str) -> str:
+    return f"""\nimport network, time\nsta = network.WLAN(network.STA_IF)\nif not sta.active():\n    sta.active(True)\nif sta.isconnected():\n    sta.disconnect()\n    time.sleep_ms(200)\nsta.connect({ssid!r}, {wifi_password!r})\ndeadline = time.ticks_add(time.ticks_ms(), 15000)\nwhile not sta.isconnected():\n    if time.ticks_diff(deadline, time.ticks_ms()) <= 0:\n        raise RuntimeError('Wi-Fi connect timeout')\n    time.sleep_ms(200)\nimport webrepl\nwebrepl.start(password={webrepl_password!r})\nprint('IP=' + sta.ifconfig()[0])\n"""
+
+
+def register(mcp: FastMCP, manager: SessionManager) -> None:
     """デバイス関連ツールを MCP サーバーに登録する。"""
 
     @mcp.tool()
@@ -156,27 +244,38 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         }
 
     @mcp.tool()
-    def micropython_connect(port: str, baudrate: int = 115200) -> ConnectionResult:
+    def micropython_connect(
+        target: str,
+        password: str | None = None,
+        baudrate: int = 115200,
+    ) -> ConnectionResult:
         """
-        指定した COM ポートの MicroPython ボードに接続する。
+        指定ターゲットへ接続する。
 
         Args:
-            port: シリアルポート名 (例: "COM3")
-            baudrate: ボーレート (通常は 115200)
+            target: `COM3` なら serial、`host[:port]` なら WebREPL
+            password: WebREPL 接続時のパスワード
+            baudrate: serial 接続時のボーレート
         """
         try:
-            manager.connect(port, baudrate)
+            status = manager.connect(target=target, password=password, baudrate=baudrate)
             return {
                 "ok": True,
-                "port": port,
-                "baudrate": baudrate,
+                "target": target,
+                "transport": status.get("transport"),
+                "baudrate": status.get("baudrate") if isinstance(status.get("baudrate"), int) else None,
+                "host": status.get("host") if isinstance(status.get("host"), str) else None,
+                "port": status.get("port"),
                 "error": None,
             }
         except Exception as e:
             return {
                 "ok": False,
-                "port": port,
+                "target": target,
+                "transport": None,
                 "baudrate": baudrate,
+                "host": None,
+                "port": None,
                 "error": str(e),
             }
 
@@ -191,6 +290,21 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         manager.disconnect()
         return {
             "ok": True,
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_connection_status() -> ConnectionStatusResult:
+        """現在の接続状態を返す。"""
+        status = manager.connection_status()
+        return {
+            "ok": True,
+            "connected": bool(status.get("connected")),
+            "transport": status.get("transport") if isinstance(status.get("transport"), str) else None,
+            "target": status.get("target") if isinstance(status.get("target"), str) else None,
+            "host": status.get("host") if isinstance(status.get("host"), str) else None,
+            "port": status.get("port"),
+            "baudrate": status.get("baudrate") if isinstance(status.get("baudrate"), int) else None,
             "error": None,
         }
 
@@ -248,13 +362,13 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
             return {"ok": False, "error": str(e)}
 
     @mcp.tool()
-    def micropython_serial_read(
+    def micropython_read_stream(
         duration: float,
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
     ) -> SerialReadResult:
         try:
-            result = manager.serial_read(
+            result = manager.read_stream(
                 duration=duration,
                 idle_timeout=idle_timeout,
                 max_bytes=max_bytes,
@@ -276,13 +390,13 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
             }
 
     @mcp.tool()
-    def micropython_serial_read_until(
+    def micropython_read_until(
         pattern: str,
         timeout: float,
         max_bytes: int | None = None,
     ) -> SerialReadUntilResult:
         try:
-            result = manager.serial_read_until(
+            result = manager.read_until(
                 pattern=pattern,
                 timeout=timeout,
                 max_bytes=max_bytes,
@@ -322,11 +436,78 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
                 "truncated": result["truncated"],
                 "error": None,
             }
+        except UnsupportedOperationError as e:
+            return {
+                "ok": False,
+                "stdout": "",
+                "reset_ok": False,
+                "truncated": False,
+                "error": str(e),
+            }
         except Exception as e:
             return {
                 "ok": False,
                 "stdout": "",
                 "reset_ok": False,
                 "truncated": False,
+                "error": str(e),
+            }
+
+    @mcp.tool()
+    def micropython_webrepl_bootstrap(
+        ssid: str,
+        wifi_password: str,
+        webrepl_password: str,
+    ) -> BootstrapResult:
+        """
+        serial 接続中のデバイスに WebREPL 用の boot.py 設定を書き込む。
+        """
+        try:
+            manager.require_serial_connection()
+            existing_boot = _read_remote_text(manager, "/boot.py")
+            managed_block = _render_boot_block(ssid, wifi_password, webrepl_password)
+            new_boot = _merge_boot_content(existing_boot, managed_block)
+            probe = manager.exec_code(
+                _bootstrap_probe_code(ssid, wifi_password, webrepl_password),
+                timeout=20.0,
+            )
+            if not probe.ok:
+                return {
+                    "ok": False,
+                    "ip": "",
+                    "boot_updated": False,
+                    "error": probe.stderr.strip() or "bootstrap probe failed",
+                }
+            ip = ""
+            for line in probe.stdout.splitlines():
+                if line.startswith("IP="):
+                    ip = line[3:].strip()
+                    break
+            if not ip:
+                return {
+                    "ok": False,
+                    "ip": "",
+                    "boot_updated": False,
+                    "error": "Wi-Fi connected but no IP address was reported",
+                }
+            _write_remote_text(manager, "/boot.py", new_boot)
+            return {
+                "ok": True,
+                "ip": ip,
+                "boot_updated": True,
+                "error": None,
+            }
+        except UnsupportedOperationError as e:
+            return {
+                "ok": False,
+                "ip": "",
+                "boot_updated": False,
+                "error": str(e),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "ip": "",
+                "boot_updated": False,
                 "error": str(e),
             }

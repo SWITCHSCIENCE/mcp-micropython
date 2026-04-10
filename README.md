@@ -3,7 +3,7 @@
 MicroPython REPL への MCP ブリッジサーバー。
 
 Claude Desktop, Codex (VSCode), Copilot (VSCode), Antigravity などの MCP クライアントから、
-USB Serial 経由で MicroPython (ESP32, RP2040, etc.) を操作できます。
+USB Serial または WebREPL 経由で MicroPython (ESP32, RP2040, etc.) を操作できます。
 
 `HARDWARE.md` を単なる配線メモではなく、将来のセッションが再利用するためのボード固有ドキュメントとして育てていく運用を想定しています。たとえばサーボ操作の依頼が来たら、その場限りのコード片で済ませるのではなく、小さな helper module をデバイス上に作成し、今後の使い方や前提が増えたときだけ `HARDWARE.md` に短い利用メモを追記して、次回以降はその helper を再利用する形を推奨します。
 
@@ -83,19 +83,34 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | ツール | 説明 |
 |---|---|
 | `micropython_list_ports` | 利用可能なシリアルポートを列挙 |
-| `micropython_connect` | 指定ポートに接続 |
+| `micropython_connect` | `COM3` または `host[:port]` に接続 |
 | `micropython_disconnect` | 接続を切断 |
+| `micropython_connection_status` | 現在の接続状態を取得 |
 | `micropython_exec` | Python コードをブロック実行 |
 | `micropython_eval` | 式を評価して値を返す |
 | `micropython_get_info` | デバイス情報取得 |
 | `micropython_reset` | ソフトリセット |
 | `micropython_interrupt` | Ctrl-C を送って実行中の処理を中断 |
-| `micropython_serial_read` | 一定時間ぶんのシリアル出力を読む |
-| `micropython_serial_read_until` | 特定文字列が出るまで待つ |
-| `micropython_reset_and_capture` | ボードをリセットして起動ログを取得 |
+| `micropython_read_stream` | 一定時間ぶんの出力を読む |
+| `micropython_read_until` | 特定文字列が出るまで待つ |
+| `micropython_reset_and_capture` | ボードをリセットして起動ログを取得（serial 専用） |
 | `micropython_list_files` | ファイル一覧 |
 | `micropython_read_file` | ファイル読み出し |
 | `micropython_read_hardware_md` | `/HARDWARE.md` を読み出し |
 | `micropython_write_file` | ファイル書き込み |
 | `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |
+| `micropython_webrepl_bootstrap` | serial 接続中に `boot.py` へ WebREPL 設定を反映 |
+
+## 接続例
+
+```powershell
+# serial
+micropython_connect(target="COM3")
+
+# WebREPL (default port 8266)
+micropython_connect(target="192.168.0.10", password="secret")
+
+# WebREPL with explicit port
+micropython_connect(target="192.168.0.10:8266", password="secret")
+```

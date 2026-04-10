@@ -20,7 +20,7 @@ from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from ..serial_manager import NotConnectedError, SerialManager
+from ..session_manager import NotConnectedError, SessionManager
 
 HARDWARE_MD_PATH = "/HARDWARE.md"
 
@@ -61,7 +61,7 @@ class DeleteFileResult(TypedDict):
     error: str | None
 
 
-def register(mcp: FastMCP, manager: SerialManager) -> None:
+def register(mcp: FastMCP, manager: SessionManager) -> None:
     """ファイルシステムツールを MCP サーバーに登録する。"""
 
     def _write_text_file(path: str, content: str, mode: str, timeout: float) -> WriteFileResult:

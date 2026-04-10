@@ -100,17 +100,53 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_write_file` | ファイル書き込み |
 | `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |
-| `micropython_webrepl_bootstrap` | serial 接続中に `boot.py` へ WebREPL 設定を反映 |
 
-## 接続例
+## WebREPL 事前設定
 
-```powershell
-# serial
-micropython_connect(target="COM3")
+WebREPL 接続を使う場合は、対象ボード側の Wi-Fi 接続と `webrepl.start()` が事前設定済みである必要があります。
+この MCP サーバーは設定済みの WebREPL へ接続することだけを担当し、`boot.py` への初期セットアップは行いません。
 
-# WebREPL (default port 8266)
-micropython_connect(target="192.168.0.10", password="secret")
+手動設定の一例:
 
-# WebREPL with explicit port
-micropython_connect(target="192.168.0.10:8266", password="secret")
+`/boot.py`
+
+```python
+try:
+    import network
+    import time
+    import webrepl
+    from webrepl_secrets import WIFI_SSID, WIFI_PASSWORD, WEBREPL_PASSWORD
+
+    sta = network.WLAN(network.STA_IF)
+    if not sta.active():
+        sta.active(True)
+    if not sta.isconnected():
+        sta.connect(WIFI_SSID, WIFI_PASSWORD)
+        deadline = time.ticks_add(time.ticks_ms(), 15000)
+        while not sta.isconnected():
+            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+                raise RuntimeError("Wi-Fi connect timeout")
+            time.sleep_ms(200)
+
+    webrepl.start(password=WEBREPL_PASSWORD)
+except Exception as e:
+    print("WebREPL setup failed:", e)
 ```
+
+`/webrepl_secrets.py`
+
+```python
+WIFI_SSID = "your-ssid"
+WIFI_PASSWORD = "your-wifi-password"
+WEBREPL_PASSWORD = "secret"
+```
+
+`WEBREPL_PASSWORD` は MicroPython WebREPL の制約に合わせて 8 文字以下にしてください。
+`boot.py` とは別ファイルに分けていますが、同じデバイス上に平文で置かれる点は変わらないので、強い秘匿にはなりません。
+
+設定後の流れ:
+
+1. serial 接続で `/boot.py` と `/webrepl_secrets.py` を作成または更新する
+2. ボードを再起動する
+3. Wi-Fi 側で割り当てられた IP アドレスを確認する
+4. `micropython_connect(target="host[:port]", password="...")` で接続する

@@ -21,12 +21,11 @@ Use these short recipes as starting points for common tasks.
 1. Run `micropython_connect` with a selected serial port or a `host[:port]` WebREPL target.
 2. Confirm the connection before reading device resources.
 
-## Enable WebREPL from a serial session
+## Use WebREPL on a preconfigured board
 
-1. Connect over serial first.
-2. Read `/boot.py` if you need to understand existing startup logic.
-3. Run `micropython_webrepl_bootstrap`.
-4. Reconnect later with `micropython_connect(target="host[:port]", password="...")`.
+1. Make sure the board is already connected to Wi-Fi and WebREPL is enabled outside this MCP server.
+2. Run `micropython_connect(target="host[:port]", password="...")`.
+3. Confirm the connection before reading device resources.
 
 ## Read `HARDWARE.md`
 

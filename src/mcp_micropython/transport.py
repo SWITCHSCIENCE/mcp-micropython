@@ -247,13 +247,15 @@ class _SimpleWebSocket:
 
     def write(self, data: bytes, frame_type: int = WS_TEXT_FRAME) -> None:
         payload_len = len(data)
+        mask_key = os.urandom(4)
+        masked_payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(data))
         if payload_len < 126:
-            header = struct.pack(">BB", frame_type, payload_len)
+            header = struct.pack(">BB", frame_type, 0x80 | payload_len)
         elif payload_len < 65536:
-            header = struct.pack(">BBH", frame_type, 126, payload_len)
+            header = struct.pack(">BBH", frame_type, 0x80 | 126, payload_len)
         else:
             raise ValueError("payload too large")
-        self._sock.sendall(header + data)
+        self._sock.sendall(header + mask_key + masked_payload)
 
     def append_buffer(self, data: bytes) -> None:
         if data:

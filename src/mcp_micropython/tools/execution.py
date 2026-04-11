@@ -39,7 +39,7 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
 
         Args:
             code: 実行する Python コード (複数行可)
-            timeout: 実行タイムアウト秒数 (デフォルト 10秒)
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数 (デフォルト 10秒)
 
         Returns:
             実行結果 (stdout/stderr)

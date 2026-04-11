@@ -101,6 +101,8 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |
 
+`micropython_exec(timeout=...)` の `timeout` は、コード送信開始から Raw REPL への復帰完了までを含む全体予算として扱います。
+
 ## WebREPL 事前設定
 
 WebREPL 接続を使う場合は、対象ボード側の Wi-Fi 接続と `webrepl.start()` が事前設定済みである必要があります。

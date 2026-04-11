@@ -72,7 +72,6 @@ transport は以下の 2 種類を持つ。
 
 - `send_bytes`
 - `read_some`
-- `read_byte`
 - `flush`
 - `drain_pending_input`
 

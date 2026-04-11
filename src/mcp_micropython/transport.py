@@ -53,9 +53,6 @@ class StreamTransport(Protocol):
     def read_some(self, timeout: float) -> bytes:
         ...
 
-    def read_byte(self, timeout: float) -> bytes:
-        ...
-
     def drain_pending_input(self) -> None:
         ...
 
@@ -153,14 +150,6 @@ class SerialTransport:
         self._serial.timeout = max(timeout, 0.0)
         try:
             return self._serial.read(self._serial.in_waiting or 1)
-        finally:
-            self._serial.timeout = previous
-
-    def read_byte(self, timeout: float) -> bytes:
-        previous = self._serial.timeout
-        self._serial.timeout = max(timeout, 0.0)
-        try:
-            return self._serial.read(1)
         finally:
             self._serial.timeout = previous
 
@@ -375,19 +364,6 @@ class WebReplTransport:
         except TimeoutError:
             return b""
         return first + self._ws.drain_buffer()
-
-    def read_byte(self, timeout: float) -> bytes:
-        buffered = self._ws.drain_buffer()
-        if buffered:
-            first = buffered[:1]
-            remainder = buffered[1:]
-            if remainder:
-                self._ws._buffer.extend(remainder)
-            return first
-        try:
-            return self._ws.read(1, timeout=timeout, text_ok=True)
-        except TimeoutError:
-            return b""
 
     def drain_pending_input(self) -> None:
         self._ws.drain_buffer()

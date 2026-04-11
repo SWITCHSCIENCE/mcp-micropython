@@ -55,6 +55,7 @@ class RawRepl:
 
     def __init__(self, stream: StreamTransport) -> None:
         self._stream = stream
+        self._read_buffer = bytearray()
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -62,6 +63,7 @@ class RawRepl:
 
     def enter(self) -> None:
         """Raw REPL モードに入る。失敗時は RawReplError を送出。"""
+        self._read_buffer.clear()
         # 実行中の処理をキャンセルしてプロンプトを出す
         self._stream.send_bytes(CTRL_C)
         self._stream.send_bytes(CTRL_C)
@@ -86,6 +88,7 @@ class RawRepl:
         self._stream.send_bytes(CTRL_B)
         time.sleep(0.1)
         self._stream.drain_pending_input()
+        self._read_buffer.clear()
 
     def exec_code(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ReplResult:
         """
@@ -146,8 +149,8 @@ class RawRepl:
         terminator が現れるまでバイト列を読み込む。
         terminator 自体は戻り値に含まない。
 
-        実機対応: ser.read(1) で 1 バイトずつ読む。
-        serial の timeout=1.0 設定でブロックしつつ deadline でタイムアウト判定。
+        実機対応: できるだけチャンクで読み、terminator をまたいで先読みした
+        データは内部バッファへ戻す。大きな stdout でも 1 バイトずつ読まない。
 
         Raises:
             TimeoutError: timeout 秒以内に terminator が現れなかった
@@ -156,14 +159,25 @@ class RawRepl:
         deadline = time.monotonic() + timeout
 
         while True:
+            if self._read_buffer:
+                chunk = bytes(self._read_buffer)
+                self._read_buffer.clear()
+            else:
+                remaining = max(deadline - time.monotonic(), 0.0)
+                chunk = self._stream.read_some(timeout=min(0.25, remaining))
+
+            if chunk:
+                buf.extend(chunk)
+                idx = buf.find(terminator)
+                if idx != -1:
+                    end = idx + len(terminator)
+                    trailing = buf[end:]
+                    if trailing:
+                        self._read_buffer[:0] = trailing
+                    return bytes(buf[:idx])
+
             if time.monotonic() > deadline:
                 raise TimeoutError(
                     f"タイムアウト: {terminator!r} を {timeout:.1f}秒以内に受信できません。"
                     f" 受信済みデータ: {bytes(buf)!r}"
                 )
-            b = self._stream.read_byte(timeout=min(0.25, max(deadline - time.monotonic(), 0.0)))
-            if b:
-                buf.extend(b)
-                if buf.endswith(terminator):
-                    return bytes(buf[: -len(terminator)])
-            # 空なら deadline チェックしてループ継続

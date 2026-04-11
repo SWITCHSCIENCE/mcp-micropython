@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .transport import StreamTransport
+if TYPE_CHECKING:
+    import serial
 
 # Raw REPL 制御文字
 CTRL_A = b"\x01"   # Raw REPL モードへ
@@ -53,8 +55,8 @@ class RawReplError(Exception):
 class RawRepl:
     """MicroPython Raw REPL プロトコルの実装 (mpremote 準拠)"""
 
-    def __init__(self, stream: StreamTransport) -> None:
-        self._stream = stream
+    def __init__(self, ser: "serial.Serial") -> None:
+        self._ser = ser
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -63,13 +65,13 @@ class RawRepl:
     def enter(self) -> None:
         """Raw REPL モードに入る。失敗時は RawReplError を送出。"""
         # 実行中の処理をキャンセルしてプロンプトを出す
-        self._stream.send_bytes(CTRL_C)
-        self._stream.send_bytes(CTRL_C)
+        self._ser.write(CTRL_C)
+        self._ser.write(CTRL_C)
         time.sleep(0.2)
-        self._stream.drain_pending_input()
+        self._ser.reset_input_buffer()
 
         # Raw REPL へ移行  (mpremote: exec_raw 参照)
-        self._stream.send_bytes(CTRL_A)
+        self._ser.write(CTRL_A)
         try:
             # "raw REPL; CTRL-B to exit\r\n>" を待つ
             self._read_until(b">\r\n>", timeout=ENTER_TIMEOUT)
@@ -79,13 +81,13 @@ class RawRepl:
 
         # 念のためバッファをクリア
         time.sleep(0.05)
-        self._stream.drain_pending_input()
+        self._ser.reset_input_buffer()
 
     def exit(self) -> None:
         """Normal REPL モードに戻る。"""
-        self._stream.send_bytes(CTRL_B)
+        self._ser.write(CTRL_B)
         time.sleep(0.1)
-        self._stream.drain_pending_input()
+        self._ser.reset_input_buffer()
 
     def exec_code(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ReplResult:
         """
@@ -103,9 +105,8 @@ class RawRepl:
         """
         # コードを送信後 Ctrl+D で実行トリガー (mpremote 準拠)
         encoded = code.encode("utf-8")
-        self._stream.send_bytes(encoded)
-        self._stream.send_bytes(CTRL_D)
-        self._stream.flush()
+        self._ser.write(encoded)
+        self._ser.write(CTRL_D)
 
         # "OK" を待つ（最大 3 秒）
         try:
@@ -161,7 +162,7 @@ class RawRepl:
                     f"タイムアウト: {terminator!r} を {timeout:.1f}秒以内に受信できません。"
                     f" 受信済みデータ: {bytes(buf)!r}"
                 )
-            b = self._stream.read_byte(timeout=min(0.25, max(deadline - time.monotonic(), 0.0)))
+            b = self._ser.read(1)
             if b:
                 buf.extend(b)
                 if buf.endswith(terminator):

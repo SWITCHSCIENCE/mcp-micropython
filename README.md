@@ -3,7 +3,7 @@
 MicroPython REPL への MCP ブリッジサーバー。
 
 Claude Desktop, Codex (VSCode), Copilot (VSCode), Antigravity などの MCP クライアントから、
-USB Serial または WebREPL 経由で MicroPython (ESP32, RP2040, etc.) を操作できます。
+USB Serial 経由で MicroPython (ESP32, RP2040, etc.) を操作できます。
 
 `HARDWARE.md` を単なる配線メモではなく、将来のセッションが再利用するためのボード固有ドキュメントとして育てていく運用を想定しています。たとえばサーボ操作の依頼が来たら、その場限りのコード片で済ませるのではなく、小さな helper module をデバイス上に作成し、今後の使い方や前提が増えたときだけ `HARDWARE.md` に短い利用メモを追記して、次回以降はその helper を再利用する形を推奨します。
 
@@ -83,70 +83,19 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | ツール | 説明 |
 |---|---|
 | `micropython_list_ports` | 利用可能なシリアルポートを列挙 |
-| `micropython_connect` | `COM3` または `host[:port]` に接続 |
+| `micropython_connect` | 指定ポートに接続 |
 | `micropython_disconnect` | 接続を切断 |
-| `micropython_connection_status` | 現在の接続状態を取得 |
 | `micropython_exec` | Python コードをブロック実行 |
 | `micropython_eval` | 式を評価して値を返す |
 | `micropython_get_info` | デバイス情報取得 |
 | `micropython_reset` | ソフトリセット |
 | `micropython_interrupt` | Ctrl-C を送って実行中の処理を中断 |
-| `micropython_read_stream` | 一定時間ぶんの出力を読む |
-| `micropython_read_until` | 特定文字列が出るまで待つ |
-| `micropython_reset_and_capture` | ボードをリセットして起動ログを取得（serial 専用） |
+| `micropython_serial_read` | 一定時間ぶんのシリアル出力を読む |
+| `micropython_serial_read_until` | 特定文字列が出るまで待つ |
+| `micropython_reset_and_capture` | ボードをリセットして起動ログを取得 |
 | `micropython_list_files` | ファイル一覧 |
 | `micropython_read_file` | ファイル読み出し |
 | `micropython_read_hardware_md` | `/HARDWARE.md` を読み出し |
 | `micropython_write_file` | ファイル書き込み |
 | `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |
-
-## WebREPL 事前設定
-
-WebREPL 接続を使う場合は、対象ボード側の Wi-Fi 接続と `webrepl.start()` が事前設定済みである必要があります。
-この MCP サーバーは設定済みの WebREPL へ接続することだけを担当し、`boot.py` への初期セットアップは行いません。
-
-手動設定の一例:
-
-`/boot.py`
-
-```python
-try:
-    import network
-    import time
-    import webrepl
-    from webrepl_secrets import WIFI_SSID, WIFI_PASSWORD, WEBREPL_PASSWORD
-
-    sta = network.WLAN(network.STA_IF)
-    if not sta.active():
-        sta.active(True)
-    if not sta.isconnected():
-        sta.connect(WIFI_SSID, WIFI_PASSWORD)
-        deadline = time.ticks_add(time.ticks_ms(), 15000)
-        while not sta.isconnected():
-            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
-                raise RuntimeError("Wi-Fi connect timeout")
-            time.sleep_ms(200)
-
-    webrepl.start(password=WEBREPL_PASSWORD)
-except Exception as e:
-    print("WebREPL setup failed:", e)
-```
-
-`/webrepl_secrets.py`
-
-```python
-WIFI_SSID = "your-ssid"
-WIFI_PASSWORD = "your-wifi-password"
-WEBREPL_PASSWORD = "secret"
-```
-
-`WEBREPL_PASSWORD` は MicroPython WebREPL の制約に合わせて 8 文字以下にしてください。
-`boot.py` とは別ファイルに分けていますが、同じデバイス上に平文で置かれる点は変わらないので、強い秘匿にはなりません。
-
-設定後の流れ:
-
-1. serial 接続で `/boot.py` と `/webrepl_secrets.py` を作成または更新する
-2. ボードを再起動する
-3. Wi-Fi 側で割り当てられた IP アドレスを確認する
-4. `micropython_connect(target="host[:port]", password="...")` で接続する

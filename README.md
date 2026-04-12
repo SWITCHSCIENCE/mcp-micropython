@@ -15,6 +15,9 @@ uv sync
 
 # サーバー起動（動作確認用）
 uv run mcp-micropython-bridge
+
+# tools ラッパー経由の実機テスト CLI
+uv run python -m mcp_micropython.device_test_cli --target COM3
 ```
 
 ## MicroPython ファームウェアの書き込み
@@ -103,6 +106,34 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 
 `micropython_exec(timeout=...)` の `timeout` は、コード送信開始から Raw REPL への復帰完了までを含む全体予算として扱います。
 `micropython_read_file` / `micropython_read_hardware_md` / `micropython_write_file` / `micropython_append_file` の `timeout` も同じ意味です。
+
+## 実機テスト CLI
+
+`src/mcp_micropython/tools` の登録済みツール関数を `FakeMCP` 経由で呼び出し、実機に対して接続確認やファイル I/O、serial 専用の stream/reset 系チェックをまとめて実行できます。
+
+```powershell
+# Serial で拡張セットを実行
+uv run python -m mcp_micropython.device_test_cli --target COM3
+
+# WebREPL で共通テストだけ実行
+uv run python -m mcp_micropython.device_test_cli --target 192.168.1.10:8266 --password secret --tests common,filesystem
+
+# エントリーポイントから起動
+uv run mcp-micropython-device-test --target COM3 --tests all
+```
+
+主なオプション:
+
+- `--target`: `COM3` または `host[:port]`
+- `--password`: WebREPL 用パスワード
+- `--baudrate`: serial ボーレート
+- `--tests`: `all`, `common`, `filesystem`, `serial`, `stream`, `reset`
+- `--large-file-size`: 長文転送テストのサイズ
+- `--exec-timeout`: `exec` / ファイル操作タイムアウト
+- `--read-timeout`: `read_until` / `read_stream` / `reset_and_capture` の待機時間
+- `--reconnect-timeout`: serial リセット後に COM ポートが再出現するまで待つ時間
+
+serial で `stream` / `reset` を実行する場合、一時的に `/main.py` を差し替えて起動ログを検証したあと、元の内容へ復元します。`/boot.py` は変更しませんが、変更前提の確認として読み出します。
 
 ## WebREPL 事前設定
 

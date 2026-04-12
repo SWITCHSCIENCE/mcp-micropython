@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 mcp-micropython-bridge = "mcp_micropython.server:main"
+mcp-micropython-device-test = "mcp_micropython.device_test_cli:main"
 
 [build-system]
 requires = ["hatchling"]

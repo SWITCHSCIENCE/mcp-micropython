@@ -211,16 +211,17 @@ class SerialTransport:
 class _SimpleWebSocket:
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
-        self._buffer = bytearray()
+        self._recv_buffer = bytearray()
 
     def _recv_exactly(self, size: int, timeout: float) -> bytes:
         previous = self._sock.gettimeout()
         self._sock.settimeout(timeout)
         try:
-            data = bytearray()
-            while len(data) < size:
+            while len(self._recv_buffer) < size:
+                needed = size - len(self._recv_buffer)
+                recv_size = min(max(needed, 4096), 65536)
                 try:
-                    chunk = self._sock.recv(size - len(data))
+                    chunk = self._sock.recv(recv_size)
                 except BlockingIOError as e:
                     raise socket.timeout("timed out waiting for websocket data") from e
                 except OSError as e:
@@ -229,8 +230,10 @@ class _SimpleWebSocket:
                     raise
                 if not chunk:
                     raise ConnectionError("websocket connection closed")
-                data.extend(chunk)
-            return bytes(data)
+                self._recv_buffer.extend(chunk)
+            data = bytes(self._recv_buffer[:size])
+            del self._recv_buffer[:size]
+            return data
         finally:
             self._sock.settimeout(previous)
 
@@ -248,15 +251,16 @@ class _SimpleWebSocket:
 
     def append_buffer(self, data: bytes) -> None:
         if data:
-            self._buffer.extend(data)
+            self._recv_buffer.extend(data)
 
-    def read(self, size: int, timeout: float, text_ok: bool = True) -> bytes:
-        while len(self._buffer) < size:
+    def _read_frame_payload(self, timeout: float, text_ok: bool = True) -> bytes:
+        while True:
             try:
                 header = self._recv_exactly(2, timeout)
             except socket.timeout as e:
                 raise TimeoutError("timed out waiting for websocket data") from e
             opcode, payload_len = struct.unpack(">BB", header)
+            frame_opcode = opcode & 0x0F
             masked = bool(payload_len & 0x80)
             payload_len &= 0x7F
             if payload_len == 126:
@@ -277,43 +281,22 @@ class _SimpleWebSocket:
                 except socket.timeout as e:
                     raise TimeoutError("timed out waiting for websocket data") from e
 
-            if opcode not in (WS_BINARY_FRAME, WS_TEXT_FRAME):
-                if payload_len:
-                    try:
-                        payload = self._recv_exactly(payload_len, timeout)
-                    except socket.timeout as e:
-                        raise TimeoutError("timed out waiting for websocket data") from e
-                    if masked:
-                        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-                continue
-            if opcode == WS_TEXT_FRAME and not text_ok:
-                if payload_len:
-                    try:
-                        payload = self._recv_exactly(payload_len, timeout)
-                    except socket.timeout as e:
-                        raise TimeoutError("timed out waiting for websocket data") from e
-                    if masked:
-                        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-                continue
-
             try:
                 payload = self._recv_exactly(payload_len, timeout)
             except socket.timeout as e:
                 raise TimeoutError("timed out waiting for websocket data") from e
             if masked:
                 payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-            self._buffer.extend(payload)
+            if frame_opcode == 0x8:
+                raise ConnectionError("websocket connection closed")
+            if frame_opcode not in (0x1, 0x2):
+                continue
+            if frame_opcode == 0x1 and not text_ok:
+                continue
+            return payload
 
-        result = bytes(self._buffer[:size])
-        del self._buffer[:size]
-        return result
-
-    def drain_buffer(self) -> bytes:
-        if not self._buffer:
-            return b""
-        data = bytes(self._buffer)
-        self._buffer.clear()
-        return data
+    def read_frame(self, timeout: float, text_ok: bool = True) -> bytes:
+        return self._read_frame_payload(timeout, text_ok=text_ok)
 
 
 class WebReplTransport:
@@ -356,17 +339,12 @@ class WebReplTransport:
         self._ws.write(data, frame_type=WS_TEXT_FRAME)
 
     def read_some(self, timeout: float) -> bytes:
-        buffered = self._ws.drain_buffer()
-        if buffered:
-            return buffered
         try:
-            first = self._ws.read(1, timeout=timeout, text_ok=True)
+            return self._ws.read_frame(timeout=timeout, text_ok=True)
         except TimeoutError:
             return b""
-        return first + self._ws.drain_buffer()
 
     def drain_pending_input(self) -> None:
-        self._ws.drain_buffer()
         while True:
             try:
                 chunk = self.read_some(timeout=0.05)

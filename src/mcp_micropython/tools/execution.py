@@ -42,7 +42,10 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数 (デフォルト 10秒)
 
         Returns:
-            実行結果 (stdout/stderr)
+            ok: 実行に成功したら True
+            stdout: 標準出力
+            stderr: 標準エラー出力
+            error: エラー時のメッセージ。成功時は None
 
         Example:
             code = "import machine\\nprint(machine.freq())"
@@ -70,7 +73,9 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
             expression: 評価する Python 式 (例: "1 + 1", "machine.freq()")
 
         Returns:
-            評価結果の文字列
+            ok: 評価に成功したら True
+            result: 評価結果の文字列表現
+            error: エラー時のメッセージ。成功時は None
         """
         try:
             result = manager.eval_expr(expression)

@@ -153,7 +153,7 @@ class RenamePathResult(TypedDict):
 
 
 def register(mcp: FastMCP, manager: SessionManager) -> None:
-    """ファイルシステムツールを MCP サーバーに登録する。"""
+    """ファイルシステムツールを MCP サーバーに登録"""
 
     def _path_join(parent: str, name: str) -> str:
         if parent in ("", "/"):
@@ -472,7 +472,7 @@ except Exception as e:
     @mcp.tool()
     def micropython_list_files(path: str = "/") -> ListFilesResult:
         """
-        MicroPython ボードのファイルシステム上のファイル/ディレクトリを一覧表示する。
+        MicroPython ボードのファイルシステム上のファイル/ディレクトリを一覧表示
 
         Args:
             path: 一覧表示するディレクトリのパス (デフォルト: "/")
@@ -562,10 +562,19 @@ except Exception as e:
     @mcp.tool()
     def micropython_stat_path(path: str) -> StatPathResult:
         """
-        MicroPython ボード上のパス情報を取得する。
+        MicroPython ボード上のパス情報を取得
 
         Args:
             path: 対象パス
+
+        Returns:
+            ok: 取得に成功したら True
+            path: 対象パス
+            kind: `file`, `dir`, `unknown` のいずれか
+            size_bytes: ファイルサイズ
+            mode: `os.stat()` の mode 値
+            mtime: 更新時刻
+            error: エラー時のメッセージ
         """
         return _stat_path(path)
 
@@ -578,14 +587,22 @@ except Exception as e:
         as_base64: bool = False,
     ) -> ReadFileResult:
         """
-        MicroPython ボードのファイルを読み出して返す。
+        MicroPython ボードのファイルを読み出して返す
 
         Args:
             path: 読み出すファイルのパス (例: "/main.py")
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: テキストデコードに使うエンコーディング
             errors: テキストデコード時のエラー処理
-            as_base64: True のときは base64 文字列として返す
+            as_base64: True のときは `content` を空にし、`content_base64` に base64 を返す
+
+        Returns:
+            ok: 読み出しに成功したら True
+            path: 読み出したファイルパス
+            content: テキスト内容。`as_base64=True` のときは空文字列
+            content_base64: base64 内容。`as_base64=False` のときは None
+            size_bytes: 読み出したバイト数
+            error: エラー時のメッセージ
         """
         data, error = _read_file_bytes(path, float(timeout))
         if error is not None or data is None:
@@ -632,8 +649,7 @@ except Exception as e:
     @mcp.tool()
     def micropython_read_hardware_md(timeout: int = 5) -> ReadFileResult:
         """
-        デバイス上の /HARDWARE.md を読み出して返す。
-        GPIO 割り当てや接続部品の前提確認用のショートカット。
+        デバイス上の /HARDWARE.md を読み出して返す
 
         Args:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
@@ -678,13 +694,21 @@ except Exception as e:
         overwrite: bool = True,
     ) -> UploadFileResult:
         """
-        ローカルファイルを MicroPython ボードへ転送する。
+        ローカルファイルを MicroPython ボードへ転送
 
         Args:
-            local_path: ホスト側ファイルパス
+            local_path: ホスト側ファイルパス。ワークスペース内のみ指定可能
             remote_path: デバイス側ファイルパス
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             overwrite: False のとき既存ファイルを上書きしない
+
+        Returns:
+            ok: 転送に成功したら True
+            local_path: 読み込んだローカルパス
+            remote_path: 書き込んだデバイス側パス
+            bytes_written: 書き込んだバイト数
+            sha256: 転送内容の sha256。失敗時は None
+            error: エラー時のメッセージ
         """
         data, resolved_local_path, error = _read_local_file_bytes(local_path)
         local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
@@ -732,9 +756,17 @@ except Exception as e:
 
         Args:
             remote_path: デバイス側ファイルパス
-            local_path: ホスト側保存先パス
+            local_path: ホスト側保存先パス。ワークスペース内のみ指定可能
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             overwrite: False のとき既存ファイルを上書きしない
+
+        Returns:
+            ok: 保存に成功したら True
+            remote_path: 読み出したデバイス側パス
+            local_path: 保存したローカルパス
+            bytes_written: 保存したバイト数
+            sha256: 保存内容の sha256。失敗時は None
+            error: エラー時のメッセージ
         """
         resolved_local_path, path_error = _ensure_local_workspace_path(local_path)
         local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
@@ -796,9 +828,21 @@ except Exception as e:
         ローカルファイルとデバイス上のファイルが一致するか確認する。
 
         Args:
-            local_path: ホスト側ファイルパス
+            local_path: ホスト側ファイルパス。ワークスペース内のみ指定可能
             remote_path: デバイス側ファイルパス
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+
+        Returns:
+            ok: 比較処理に成功したら True
+            local_path: 比較したローカルパス
+            remote_path: 比較したデバイス側パス
+            local_sha256: ローカルファイルの sha256
+            remote_sha256: デバイス側ファイルの sha256
+            same: 両者が一致したら True
+            error: エラー時のメッセージ
+
+        Notes:
+            比較は sha256 ハッシュで行う。
         """
         local_data, resolved_local_path, local_error = _read_local_file_bytes(local_path)
         local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
@@ -856,6 +900,15 @@ except Exception as e:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: テキストデコードに使うエンコーディング
             errors: テキストデコード時のエラー処理
+
+        Returns:
+            ok: 読み出しに成功したら True
+            path: 対象ファイルパス
+            start_line: 実際に使った開始行番号
+            line_count: 返した行数
+            content: 返したテキスト
+            eof: 返却範囲がファイル末尾に達したら True
+            error: エラー時のメッセージ
         """
         if start_line < 1:
             return {
@@ -920,6 +973,14 @@ except Exception as e:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: テキストデコードに使うエンコーディング
             errors: テキストデコード時のエラー処理
+
+        Returns:
+            ok: 読み出しに成功したら True
+            path: 対象ファイルパス
+            content: 返したテキスト
+            line_count: 返した行数
+            truncated: 返せなかった残り行があるとき True
+            error: エラー時のメッセージ
         """
         if lines < 1:
             return {"ok": False, "path": path, "content": "", "line_count": 0, "truncated": False, "error": "lines must be >= 1"}
@@ -963,6 +1024,14 @@ except Exception as e:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: テキストデコードに使うエンコーディング
             errors: テキストデコード時のエラー処理
+
+        Returns:
+            ok: 読み出しに成功したら True
+            path: 対象ファイルパス
+            content: 返したテキスト
+            line_count: 返した行数
+            truncated: 返せなかった先頭側の行があるとき True
+            error: エラー時のメッセージ
         """
         if lines < 1:
             return {"ok": False, "path": path, "content": "", "line_count": 0, "truncated": False, "error": "lines must be >= 1"}
@@ -1002,10 +1071,19 @@ except Exception as e:
 
         Args:
             path: 書き込み先ファイルのパス (例: "/main.py")
-            content: 書き込むテキスト内容
+            content: 書き込むテキスト内容。`content_base64` とは排他的
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: content をバイト列に変換するエンコーディング
-            content_base64: base64 で表した書き込みデータ
+            content_base64: base64 で表した書き込みデータ。`content` とは排他的
+
+        Returns:
+            ok: 書き込みに成功したら True
+            path: 書き込み先パス
+            bytes_written: 書き込んだバイト数
+            error: エラー時のメッセージ
+
+        Notes:
+            `content` と `content_base64` はどちらか片方のみ指定する。
         """
         data, error = _resolve_write_bytes(
             content=content,
@@ -1034,10 +1112,19 @@ except Exception as e:
 
         Args:
             path: 追記先ファイルのパス (例: "/main.py")
-            content: 追記するテキスト内容
+            content: 追記するテキスト内容。`content_base64` とは排他的
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
             encoding: content をバイト列に変換するエンコーディング
-            content_base64: base64 で表した追記データ
+            content_base64: base64 で表した追記データ。`content` とは排他的
+
+        Returns:
+            ok: 追記に成功したら True
+            path: 追記先パス
+            bytes_written: 今回追記したバイト数
+            error: エラー時のメッセージ
+
+        Notes:
+            `content` と `content_base64` はどちらか片方のみ指定する。
         """
         data, error = _resolve_write_bytes(
             content=content,

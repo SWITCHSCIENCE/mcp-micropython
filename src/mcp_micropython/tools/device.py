@@ -146,8 +146,7 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
     @mcp.tool()
     def micropython_list_ports() -> ListPortsResult:
         """
-        接続可能な USB シリアルポートを一覧表示する。
-        MicroPython ボードを接続した後にこのツールを呼んで COM ポート名を確認してください。
+        接続可能なシリアルポートを一覧表示
         """
         ports = manager.list_ports()
         return {
@@ -170,7 +169,7 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
         baudrate: int = 115200,
     ) -> ConnectionResult:
         """
-        指定ターゲットへ接続する。
+        指定ターゲットへ接続
 
         Args:
             target: `COM3` なら serial、`host[:port]` なら WebREPL
@@ -201,7 +200,14 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
 
     @mcp.tool()
     def micropython_disconnect() -> DisconnectResult:
-        """MicroPython ボードのシリアル接続を切断する。"""
+        """
+        現在の MicroPython ボード接続を切断
+        未接続時も成功を返す
+
+        Returns:
+            ok: 成功 True
+            error: エラー時のメッセージ
+        """
         if not manager.is_connected:
             return {
                 "ok": True,
@@ -215,7 +221,19 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
 
     @mcp.tool()
     def micropython_connection_status() -> ConnectionStatusResult:
-        """現在の接続状態を返す。"""
+        """
+        現在の接続状態を返す
+
+        Returns:
+            ok: 成功 True
+            connected: 接続中なら True
+            transport: `serial` または `webrepl`
+            target: 接続時に指定したターゲット
+            host: WebREPL 接続時のホスト
+            port: 接続先ポート
+            baudrate: serial 接続時のボーレート
+            error: エラー時のメッセージ
+        """
         status = manager.connection_status()
         return {
             "ok": True,
@@ -231,8 +249,18 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
     @mcp.tool()
     def micropython_get_info() -> GetInfoResult:
         """
-        MicroPython ボードのデバイス情報を取得する。
-        (MicroPython バージョン・空きメモリ・フラッシュ使用量・CPU周波数 など)
+        MicroPython ボードのデバイス情報を取得
+
+        Returns:
+            ok: 成功 True
+            info: 取得したデバイス情報
+            error: エラー時のメッセージ
+
+        Notes:
+            `info` には必要に応じて次を含む。
+            `platform`, `version`, `implementation`,
+            `free_mem`, `alloc_mem`, `freq_mhz`,
+            `fs_total_kb`, `fs_free_kb`
         """
         try:
             result = manager.exec_code(_GET_INFO_CODE, timeout=5.0)
@@ -257,8 +285,8 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
     @mcp.tool()
     def micropython_reset() -> ActionResult:
         """
-        MicroPython ボードをソフトリセットする (machine.reset() に相当)。
-        リセット後は再接続が必要です。
+        MicroPython ボードをソフトリセット (machine.reset() に相当)
+        リセット後は再接続が必要
         """
         try:
             # machine.reset() はレスポンスを返さずリセットするため
@@ -274,7 +302,7 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
 
     @mcp.tool()
     def micropython_interrupt() -> ActionResult:
-        """Ctrl-C を送って実行中の処理を中断する。"""
+        """Ctrl-C を送って実行中の処理を中断"""
         try:
             manager.interrupt()
             return {"ok": True, "error": None}
@@ -287,6 +315,21 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
     ) -> SerialReadResult:
+        """
+        接続中のデバイスから一定時間ストリーム出力を読み取る
+
+        Args:
+            duration: 読み取りを続ける最大秒数
+            idle_timeout: この秒数だけ無通信なら早期終了
+            max_bytes: 読み取る最大バイト数。超えると `truncated=True`
+
+        Returns:
+            ok: 成功 True
+            stdout: 読み取ったテキスト
+            truncated: `max_bytes` で打ち切られたら True
+            bytes_read: 実際に読んだバイト数
+            error: エラー時のメッセージ
+        """
         try:
             result = manager.read_stream(
                 duration=duration,
@@ -315,6 +358,21 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
         timeout: float,
         max_bytes: int | None = None,
     ) -> SerialReadUntilResult:
+        """
+        接続中のデバイス出力を、指定文字列が現れるまで読み取る
+
+        Args:
+            pattern: 検出したい文字列。正規表現ではなく部分文字列
+            timeout: 待機する最大秒数
+            max_bytes: 読み取る最大バイト数
+
+        Returns:
+            ok: 成功 True
+            matched: `pattern` を検出したら True
+            stdout: 読み取ったテキスト
+            bytes_read: 実際に読んだバイト数
+            error: エラー時のメッセージ
+        """
         try:
             result = manager.read_until(
                 pattern=pattern,
@@ -343,6 +401,21 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
     ) -> ResetCaptureResult:
+        """
+        デバイスをリセットし、起動直後の出力を一定時間読み取る
+
+        Args:
+            capture_duration: リセット後の読み取り最大秒数
+            idle_timeout: この秒数だけ無通信なら早期終了
+            max_bytes: 読み取る最大バイト数。超えると `truncated=True`
+
+        Returns:
+            ok: リセットと読み取り呼び出しに成功したら True
+            stdout: 起動後に取得したテキスト
+            reset_ok: リセット操作自体が成功したら True
+            truncated: `max_bytes` で打ち切られたら True
+            error: エラー時のメッセージ
+        """
         try:
             result = manager.reset_and_capture(
                 capture_duration=capture_duration,

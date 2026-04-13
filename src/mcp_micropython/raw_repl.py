@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import serial
+from .transport import StreamTransport
 
 # Raw REPL 制御文字
 CTRL_A = b"\x01"   # Raw REPL モードへ
@@ -55,8 +53,9 @@ class RawReplError(Exception):
 class RawRepl:
     """MicroPython Raw REPL プロトコルの実装 (mpremote 準拠)"""
 
-    def __init__(self, ser: "serial.Serial") -> None:
-        self._ser = ser
+    def __init__(self, stream: StreamTransport) -> None:
+        self._stream = stream
+        self._read_buffer = bytearray()
 
     # ------------------------------------------------------------------
     # 公開 API
@@ -64,14 +63,15 @@ class RawRepl:
 
     def enter(self) -> None:
         """Raw REPL モードに入る。失敗時は RawReplError を送出。"""
+        self._read_buffer.clear()
         # 実行中の処理をキャンセルしてプロンプトを出す
-        self._ser.write(CTRL_C)
-        self._ser.write(CTRL_C)
+        self._stream.send_bytes(CTRL_C)
+        self._stream.send_bytes(CTRL_C)
         time.sleep(0.2)
-        self._ser.reset_input_buffer()
+        self._stream.drain_pending_input()
 
         # Raw REPL へ移行  (mpremote: exec_raw 参照)
-        self._ser.write(CTRL_A)
+        self._stream.send_bytes(CTRL_A)
         try:
             # "raw REPL; CTRL-B to exit\r\n>" を待つ
             self._read_until(b"\r\n>", timeout=ENTER_TIMEOUT)
@@ -81,13 +81,14 @@ class RawRepl:
 
         # 念のためバッファをクリア
         time.sleep(0.05)
-        self._ser.reset_input_buffer()
+        self._stream.drain_pending_input()
 
     def exit(self) -> None:
         """Normal REPL モードに戻る。"""
-        self._ser.write(CTRL_B)
+        self._stream.send_bytes(CTRL_B)
         time.sleep(0.1)
-        self._ser.reset_input_buffer()
+        self._stream.drain_pending_input()
+        self._read_buffer.clear()
 
     def exec_code(self, code: str, timeout: float = DEFAULT_TIMEOUT) -> ReplResult:
         """
@@ -95,7 +96,7 @@ class RawRepl:
 
         Args:
             code: 実行する Python コード（複数行OK）
-            timeout: 実行タイムアウト（秒）
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト（秒）
 
         Returns:
             ReplResult: stdout / stderr を含む実行結果
@@ -103,25 +104,27 @@ class RawRepl:
         Raises:
             RawReplError: 通信エラーや予期しないレスポンス
         """
+        if timeout < 0:
+            raise ValueError("timeout must be >= 0")
+
         # コードを送信後 Ctrl+D で実行トリガー (mpremote 準拠)
         encoded = code.encode("utf-8")
-        self._ser.write(encoded)
-        self._ser.write(CTRL_D)
+        self._stream.send_bytes(encoded)
+        self._stream.send_bytes(CTRL_D)
+        self._stream.flush()
+        deadline = time.monotonic() + timeout
 
-        # "OK" を待つ（最大 3 秒）
-        try:
-            self._read_until(b"OK", timeout=3.0)
-        except TimeoutError as e:
-            raise RawReplError(f"'OK' を受信できませんでした: {e}") from e
+        # "OK" を待つ
+        self._read_until_with_budget(b"OK", deadline=deadline, stage="'OK' 応答")
 
         # stdout を \x04 まで読む
-        stdout_bytes = self._read_until(CTRL_D, timeout=timeout)
+        stdout_bytes = self._read_until_with_budget(CTRL_D, deadline=deadline, stage="stdout")
 
         # stderr を \x04 まで読む
-        stderr_bytes = self._read_until(CTRL_D, timeout=3.0)
+        stderr_bytes = self._read_until_with_budget(CTRL_D, deadline=deadline, stage="stderr")
 
         # 終端プロンプト ">" を読み捨てる
-        self._read_until(b">", timeout=2.0)
+        self._read_until_with_budget(b">", deadline=deadline, stage="Raw REPL プロンプト復帰")
 
         return ReplResult(
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
@@ -142,13 +145,25 @@ class RawRepl:
     # 内部ユーティリティ
     # ------------------------------------------------------------------
 
+    def _read_until_with_budget(self, terminator: bytes, deadline: float, stage: str) -> bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RawReplError(
+                f"{stage} の待機を開始する前にタイムアウトしました。"
+                " exec_code(timeout=...) はコード送信から Raw REPL 復帰までの全体予算です。"
+            )
+        try:
+            return self._read_until(terminator, timeout=remaining)
+        except TimeoutError as e:
+            raise RawReplError(f"{stage} の受信中にタイムアウトしました: {e}") from e
+
     def _read_until(self, terminator: bytes, timeout: float = DEFAULT_TIMEOUT) -> bytes:
         """
         terminator が現れるまでバイト列を読み込む。
         terminator 自体は戻り値に含まない。
 
-        実機対応: ser.read(1) で 1 バイトずつ読む。
-        serial の timeout=1.0 設定でブロックしつつ deadline でタイムアウト判定。
+        実機対応: できるだけチャンクで読み、terminator をまたいで先読みした
+        データは内部バッファへ戻す。大きな stdout でも 1 バイトずつ読まない。
 
         Raises:
             TimeoutError: timeout 秒以内に terminator が現れなかった
@@ -157,14 +172,30 @@ class RawRepl:
         deadline = time.monotonic() + timeout
 
         while True:
-            if time.monotonic() > deadline:
+            if self._read_buffer:
+                chunk = bytes(self._read_buffer)
+                self._read_buffer.clear()
+            else:
+                remaining = max(deadline - time.monotonic(), 0.0)
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"タイムアウト: {terminator!r} を {timeout:.1f}秒以内に受信できません。"
+                        f" 受信済みデータ: {bytes(buf)!r}"
+                    )
+                chunk = self._stream.read_some(timeout=min(0.25, remaining))
+
+            if chunk:
+                buf.extend(chunk)
+                idx = buf.find(terminator)
+                if idx != -1:
+                    end = idx + len(terminator)
+                    trailing = buf[end:]
+                    if trailing:
+                        self._read_buffer[:0] = trailing
+                    return bytes(buf[:idx])
+
+            if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"タイムアウト: {terminator!r} を {timeout:.1f}秒以内に受信できません。"
                     f" 受信済みデータ: {bytes(buf)!r}"
                 )
-            b = self._ser.read(1)
-            if b:
-                buf.extend(b)
-                if buf.endswith(terminator):
-                    return bytes(buf[: -len(terminator)])
-            # 空なら deadline チェックしてループ継続

@@ -1,15 +1,13 @@
 # Recipes
 
-Use these short recipes as starting points for common tasks.
+Use these short recipes as the default workflow.
 
-## Preferred approach
+## Default approach
 
-- Treat `HARDWARE.md` as the board-specific guide.
-- Use documented helper modules or board APIs first.
-- If new behavior is needed, add or extend a small reusable helper module instead of leaving a one-off script.
-- If the task changes reusable board-specific behavior or assumptions, follow `micropython://policy/hardware-docs` before considering the task complete.
-- Only fall back to direct `machine.Pin`, `I2C`, `SPI`, or `UART` access when no supported path is documented.
+- Read `HARDWARE.md` before making hardware assumptions.
+- Prefer documented helper modules or board APIs.
 - Read `/boot.py` and `/main.py` before modifying either file.
+- If board-specific behavior changes, follow `micropython://policy/hardware-docs`.
 
 ## List available ports
 
@@ -18,8 +16,16 @@ Use these short recipes as starting points for common tasks.
 
 ## Connect to a board
 
-1. Run `micropython_connect` with the selected port.
-2. Confirm the connection before reading device resources.
+1. Run `micropython_connect` with a selected serial port or a `host[:port]` WebREPL target.
+2. If using WebREPL, provide `password`.
+3. If needed, run `micropython_connection_status` to confirm the active session.
+
+## Use WebREPL on a preconfigured board
+
+1. Make sure the board is already connected to Wi-Fi and WebREPL is enabled outside this MCP server.
+2. Run `micropython_connect(target="host[:port]", password="...")`.
+3. If no port is given, the default is `8266`.
+4. If needed, run `micropython_connection_status`.
 
 ## Read `HARDWARE.md`
 
@@ -33,19 +39,20 @@ Use these short recipes as starting points for common tasks.
 2. Run `micropython_list_files` with `path="/"`.
 3. Read specific files with `micropython_read_file`.
 
-## Use or add a hardware feature
+## Wait for device output
 
-1. Read `HARDWARE.md` and inspect the existing device files.
-2. If a supported helper exists, use it.
-3. If not, implement the behavior as a small helper module or extend an existing one.
-4. Verify with a short explicit call.
-5. If the change affects future board usage, update `HARDWARE.md` according to `micropython://policy/hardware-docs`.
+1. Run `micropython_read_until` to wait for a specific string.
+2. Run `micropython_read_stream` to capture output for a fixed duration.
 
 ## Recover from a hang
 
 1. Run `micropython_interrupt`.
 2. If the REPL does not recover, reconnect.
-3. If the board was reset, treat the session as disconnected.
+
+## Capture startup logs after reset
+
+1. Use `micropython_reset_and_capture` only on serial sessions.
+2. For WebREPL sessions, reconnect after reset instead.
 
 ## Disconnect
 

@@ -20,7 +20,7 @@ from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from ..serial_manager import NotConnectedError, SerialManager
+from ..session_manager import NotConnectedError, SessionManager
 
 HARDWARE_MD_PATH = "/HARDWARE.md"
 
@@ -61,7 +61,7 @@ class DeleteFileResult(TypedDict):
     error: str | None
 
 
-def register(mcp: FastMCP, manager: SerialManager) -> None:
+def register(mcp: FastMCP, manager: SessionManager) -> None:
     """ファイルシステムツールを MCP サーバーに登録する。"""
 
     def _write_text_file(path: str, content: str, mode: str, timeout: float) -> WriteFileResult:
@@ -202,12 +202,13 @@ except Exception as e:
         }
 
     @mcp.tool()
-    def micropython_read_file(path: str) -> ReadFileResult:
+    def micropython_read_file(path: str, timeout: int = 5) -> ReadFileResult:
         """
         MicroPython ボードのファイルを読み出して返す。
 
         Args:
             path: 読み出すファイルのパス (例: "/main.py")
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
         """
         code = f"""\
 try:
@@ -217,7 +218,7 @@ except Exception as e:
     print(f'ERROR: {{e}}')
 """
         try:
-            result = manager.exec_code(code, timeout=5.0)
+            result = manager.exec_code(code, timeout=float(timeout))
         except NotConnectedError as e:
             return {"ok": False, "path": path, "content": "", "size_bytes": 0, "error": str(e)}
         except Exception as e:
@@ -248,10 +249,13 @@ except Exception as e:
         }
 
     @mcp.tool()
-    def micropython_read_hardware_md() -> ReadFileResult:
+    def micropython_read_hardware_md(timeout: int = 5) -> ReadFileResult:
         """
         デバイス上の /HARDWARE.md を読み出して返す。
         GPIO 割り当てや接続部品の前提確認用のショートカット。
+
+        Args:
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
         """
         code = f"""\
 try:
@@ -261,7 +265,7 @@ except Exception as e:
     print(f'ERROR: {{e}}')
 """
         try:
-            result = manager.exec_code(code, timeout=5.0)
+            result = manager.exec_code(code, timeout=float(timeout))
         except NotConnectedError as e:
             return {
                 "ok": False,
@@ -304,35 +308,37 @@ except Exception as e:
         }
 
     @mcp.tool()
-    def micropython_write_file(path: str, content: str) -> WriteFileResult:
+    def micropython_write_file(path: str, content: str, timeout: int = 10) -> WriteFileResult:
         """
         MicroPython ボードのファイルに内容を書き込む（上書き）。
 
         Args:
             path: 書き込み先ファイルのパス (例: "/main.py")
             content: 書き込む内容 (テキスト)
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
 
         Note:
             大容量ファイル (数 KB 以上) は Raw REPL の制約により失敗する場合がある。
             その場合は小さいチャンクに分け、最初にこのツールで空文字または先頭チャンクを書き、
             続けて micropython_append_file で追記する。
         """
-        return _write_text_file(path=path, content=content, mode="w", timeout=10.0)
+        return _write_text_file(path=path, content=content, mode="w", timeout=float(timeout))
 
     @mcp.tool()
-    def micropython_append_file(path: str, content: str) -> WriteFileResult:
+    def micropython_append_file(path: str, content: str, timeout: int = 10) -> WriteFileResult:
         """
         MicroPython ボードのファイルに内容を追記する。
 
         Args:
             path: 追記先ファイルのパス (例: "/main.py")
             content: 追記する内容 (テキスト)
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
 
         Note:
             大きい内容を書き込むときは、content を小さいチャンクに分けて
             このツールを複数回呼ぶことで転送しやすくなる。
         """
-        return _write_text_file(path=path, content=content, mode="a", timeout=10.0)
+        return _write_text_file(path=path, content=content, mode="a", timeout=float(timeout))
 
     @mcp.tool()
     def micropython_delete_file(path: str) -> DeleteFileResult:

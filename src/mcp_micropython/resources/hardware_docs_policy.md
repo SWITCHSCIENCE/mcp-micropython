@@ -1,6 +1,6 @@
 # HARDWARE.md update policy
 
-Update `/HARDWARE.md` when a task changes or expands board-specific knowledge that future sessions should rely on, including:
+Update `/HARDWARE.md` when a task changes board-specific knowledge that future sessions should rely on, including:
 
 - GPIO roles or wiring assumptions
 - attached peripherals or device addresses
@@ -13,6 +13,6 @@ Do not update `/HARDWARE.md` for:
 - pure refactors that do not change board usage
 - internal implementation changes with no board-visible impact
 
-Rule of thumb: if the change affects how someone should use, initialize, wire, or understand the board in a future session, update `/HARDWARE.md`.
+Rule of thumb: if the change affects how to use, initialize, wire, or understand the board later, update `/HARDWARE.md`.
 
 When this applies, treat the task as incomplete until `/HARDWARE.md` is updated.

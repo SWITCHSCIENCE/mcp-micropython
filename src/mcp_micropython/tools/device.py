@@ -1,12 +1,5 @@
 """
-device.py — 接続管理・デバイス情報ツール
-
-MCP ツール:
-  - micropython_list_ports   : 利用可能なシリアルポート一覧
-  - micropython_connect      : 指定ポートに接続
-  - micropython_disconnect   : 接続を切断
-  - micropython_get_info     : デバイス情報取得 (チップ情報・空きメモリ等)
-  - micropython_reset        : ソフトリセット
+device.py — connection and device tools.
 """
 
 from __future__ import annotations
@@ -15,7 +8,8 @@ from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from ..serial_manager import SerialManager
+from ..session_manager import SessionManager
+from ..transport import UnsupportedOperationError
 
 # デバイス情報取得コード (MicroPython上で実行)
 _GET_INFO_CODE = """\
@@ -75,8 +69,11 @@ class ListPortsResult(TypedDict):
 
 class ConnectionResult(TypedDict):
     ok: bool
-    port: str
-    baudrate: int
+    target: str
+    transport: str | None
+    baudrate: int | None
+    host: str | None
+    port: int | str | None
     error: str | None
 
 
@@ -87,6 +84,17 @@ class DisconnectResult(TypedDict):
 
 class ActionResult(TypedDict):
     ok: bool
+    error: str | None
+
+
+class ConnectionStatusResult(TypedDict):
+    ok: bool
+    connected: bool
+    transport: str | None
+    target: str | None
+    host: str | None
+    port: int | str | None
+    baudrate: int | None
     error: str | None
 
 
@@ -132,7 +140,7 @@ def _parse_device_info(stdout: str) -> DeviceInfo:
     return info
 
 
-def register(mcp: FastMCP, manager: SerialManager) -> None:
+def register(mcp: FastMCP, manager: SessionManager) -> None:
     """デバイス関連ツールを MCP サーバーに登録する。"""
 
     @mcp.tool()
@@ -156,27 +164,38 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         }
 
     @mcp.tool()
-    def micropython_connect(port: str, baudrate: int = 115200) -> ConnectionResult:
+    def micropython_connect(
+        target: str,
+        password: str | None = None,
+        baudrate: int = 115200,
+    ) -> ConnectionResult:
         """
-        指定した COM ポートの MicroPython ボードに接続する。
+        指定ターゲットへ接続する。
 
         Args:
-            port: シリアルポート名 (例: "COM3")
-            baudrate: ボーレート (通常は 115200)
+            target: `COM3` なら serial、`host[:port]` なら WebREPL
+            password: WebREPL 接続時のパスワード
+            baudrate: serial 接続時のボーレート
         """
         try:
-            manager.connect(port, baudrate)
+            status = manager.connect(target=target, password=password, baudrate=baudrate)
             return {
                 "ok": True,
-                "port": port,
-                "baudrate": baudrate,
+                "target": target,
+                "transport": status.get("transport"),
+                "baudrate": status.get("baudrate") if isinstance(status.get("baudrate"), int) else None,
+                "host": status.get("host") if isinstance(status.get("host"), str) else None,
+                "port": status.get("port"),
                 "error": None,
             }
         except Exception as e:
             return {
                 "ok": False,
-                "port": port,
+                "target": target,
+                "transport": None,
                 "baudrate": baudrate,
+                "host": None,
+                "port": None,
                 "error": str(e),
             }
 
@@ -191,6 +210,21 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
         manager.disconnect()
         return {
             "ok": True,
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_connection_status() -> ConnectionStatusResult:
+        """現在の接続状態を返す。"""
+        status = manager.connection_status()
+        return {
+            "ok": True,
+            "connected": bool(status.get("connected")),
+            "transport": status.get("transport") if isinstance(status.get("transport"), str) else None,
+            "target": status.get("target") if isinstance(status.get("target"), str) else None,
+            "host": status.get("host") if isinstance(status.get("host"), str) else None,
+            "port": status.get("port"),
+            "baudrate": status.get("baudrate") if isinstance(status.get("baudrate"), int) else None,
             "error": None,
         }
 
@@ -248,13 +282,13 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
             return {"ok": False, "error": str(e)}
 
     @mcp.tool()
-    def micropython_serial_read(
+    def micropython_read_stream(
         duration: float,
         idle_timeout: float | None = None,
         max_bytes: int | None = None,
     ) -> SerialReadResult:
         try:
-            result = manager.serial_read(
+            result = manager.read_stream(
                 duration=duration,
                 idle_timeout=idle_timeout,
                 max_bytes=max_bytes,
@@ -276,13 +310,13 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
             }
 
     @mcp.tool()
-    def micropython_serial_read_until(
+    def micropython_read_until(
         pattern: str,
         timeout: float,
         max_bytes: int | None = None,
     ) -> SerialReadUntilResult:
         try:
-            result = manager.serial_read_until(
+            result = manager.read_until(
                 pattern=pattern,
                 timeout=timeout,
                 max_bytes=max_bytes,
@@ -321,6 +355,14 @@ def register(mcp: FastMCP, manager: SerialManager) -> None:
                 "reset_ok": result["reset_ok"],
                 "truncated": result["truncated"],
                 "error": None,
+            }
+        except UnsupportedOperationError as e:
+            return {
+                "ok": False,
+                "stdout": "",
+                "reset_ok": False,
+                "truncated": False,
+                "error": str(e),
             }
         except Exception as e:
             return {

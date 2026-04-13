@@ -2,30 +2,33 @@
 
 ## Cannot connect
 
-- Confirm the board is powered and visible in `micropython_list_ports`.
-- Check that the selected port is the correct one.
-- Close other software that may already hold the serial port.
+- For serial, confirm the board is powered, visible in `micropython_list_ports`, and not held by other software.
+- For WebREPL, confirm the `host[:port]`, `password`, and Wi-Fi reachability.
+- If no port is given for WebREPL, the default is `8266`.
+- Run `micropython_connection_status` if the session state is unclear.
 
 ## REPL does not respond
 
 - Run `micropython_interrupt`.
-- If there is still no response, disconnect and reconnect.
-- If needed, reset the board and reconnect.
+- If there is still no response, reconnect.
 
 ## Cannot read after reset
 
-- A reset can drop the current serial session.
+- A reset can drop the current session.
 - Reconnect before reading files or running code again.
+
+## `micropython_reset_and_capture` fails
+
+- This tool only works for serial sessions.
+- For WebREPL sessions, reconnect after reset instead.
 
 ## Long code execution is unstable
 
 - Break the task into smaller checks.
-- Prefer the documented board API from `HARDWARE.md` over reinitializing buses and pins yourself.
 - Prefer short scripts with explicit output.
-- Avoid large multi-step scripts until the board state is known.
+- Use `micropython_read_until` or `micropython_read_stream` when waiting for device output.
 
 ## Large file writes fail
 
 - Reduce the amount written in one operation.
-- Prefer smaller edits over large overwrite operations.
-- This server is not optimized for large transfers.
+- Prefer `micropython_append_file` in small chunks instead of one large overwrite.

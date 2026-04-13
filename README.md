@@ -100,7 +100,14 @@ ESP32 シリーズは `esptool.py` を利用してコマンドラインからイ
 | `micropython_list_files` | ファイル一覧 |
 | `micropython_stat_path` | パス情報取得 |
 | `micropython_read_file` | ファイル読み出し |
+| `micropython_read_lines` | 行単位で一部読み出し |
+| `micropython_head_lines` | 先頭数行を読み出し |
+| `micropython_tail_lines` | 末尾数行を読み出し |
 | `micropython_read_hardware_md` | `/HARDWARE.md` を読み出し |
+| `micropython_upload_file` | ローカルファイルをデバイスへ転送 |
+| `micropython_download_file` | デバイスファイルをローカルへ保存 |
+| `micropython_hash_file` | デバイスファイルの SHA-256 を取得 |
+| `micropython_compare_local_remote` | ローカルとデバイスの一致確認 |
 | `micropython_write_file` | ファイル書き込み |
 | `micropython_append_file` | ファイル追記 |
 | `micropython_delete_file` | ファイル削除 |

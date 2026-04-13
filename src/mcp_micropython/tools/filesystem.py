@@ -5,6 +5,9 @@ MCP ツール:
   - micropython_list_files       : ファイル/ディレクトリ一覧
   - micropython_stat_path        : パス情報取得
   - micropython_read_file        : ファイル内容の読み出し
+  - micropython_read_lines       : テキストファイルの行単位読み出し
+  - micropython_head_lines       : テキストファイル先頭行の読み出し
+  - micropython_tail_lines       : テキストファイル末尾行の読み出し
   - micropython_read_hardware_md : デバイス上の /HARDWARE.md を読む
   - micropython_write_file       : ファイルへの書き込み
   - micropython_append_file      : ファイルへの追記
@@ -18,6 +21,8 @@ from __future__ import annotations
 
 import ast
 import base64
+import hashlib
+from pathlib import Path
 from typing import TypedDict
 
 from mcp.server.fastmcp import FastMCP
@@ -51,6 +56,62 @@ class ReadFileResult(TypedDict):
     content: str
     content_base64: str | None
     size_bytes: int
+    error: str | None
+
+
+class UploadFileResult(TypedDict):
+    ok: bool
+    local_path: str
+    remote_path: str
+    bytes_written: int
+    sha256: str | None
+    error: str | None
+
+
+class DownloadFileResult(TypedDict):
+    ok: bool
+    remote_path: str
+    local_path: str
+    bytes_written: int
+    sha256: str | None
+    error: str | None
+
+
+class HashFileResult(TypedDict):
+    ok: bool
+    path: str
+    algorithm: str
+    digest: str
+    size_bytes: int
+    error: str | None
+
+
+class CompareLocalRemoteResult(TypedDict):
+    ok: bool
+    local_path: str
+    remote_path: str
+    local_sha256: str | None
+    remote_sha256: str | None
+    same: bool
+    error: str | None
+
+
+class ReadLinesResult(TypedDict):
+    ok: bool
+    path: str
+    start_line: int
+    line_count: int
+    content: str
+    eof: bool
+    error: str | None
+
+
+class ReadTextExcerptResult(TypedDict):
+    ok: bool
+    path: str
+    content: str
+    line_count: int
+    truncated: bool
     error: str | None
 
 
@@ -236,6 +297,178 @@ def register(mcp: FastMCP, manager: SessionManager) -> None:
         except Exception as e:
             return None, str(e)
 
+    def _compute_sha256(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def _workspace_root() -> Path:
+        return Path.cwd().resolve()
+
+    def _ensure_local_workspace_path(local_path: str) -> tuple[Path | None, str | None]:
+        try:
+            path = Path(local_path)
+            resolved = path.resolve() if path.is_absolute() else (_workspace_root() / path).resolve()
+            resolved.relative_to(_workspace_root())
+            return resolved, None
+        except Exception:
+            return None, "local path must stay within the workspace"
+
+    def _read_local_file_bytes(local_path: str) -> tuple[bytes | None, Path | None, str | None]:
+        resolved, error = _ensure_local_workspace_path(local_path)
+        if error is not None or resolved is None:
+            return None, None, error
+        try:
+            return resolved.read_bytes(), resolved, None
+        except Exception as e:
+            return None, resolved, str(e)
+
+    def _write_local_file_bytes(local_path: str, data: bytes, overwrite: bool) -> tuple[int, Path | None, str | None]:
+        resolved, error = _ensure_local_workspace_path(local_path)
+        if error is not None or resolved is None:
+            return 0, None, error
+        if resolved.exists() and not overwrite:
+            return 0, resolved, "local file already exists"
+        if not resolved.parent.exists():
+            return 0, resolved, "parent directory does not exist"
+        try:
+            resolved.write_bytes(data)
+        except Exception as e:
+            return 0, resolved, str(e)
+        return len(data), resolved, None
+
+    def _read_text_file(path: str, timeout: int, encoding: str, errors: str) -> tuple[str | None, int, str | None]:
+        data, error = _read_file_bytes(path, float(timeout))
+        if error is not None or data is None:
+            return None, 0, error or "read file failed"
+        try:
+            return data.decode(encoding, errors=errors), len(data), None
+        except Exception as e:
+            return None, len(data), str(e)
+
+    def _split_lines(content: str, *, keepends: bool = False) -> list[str]:
+        return content.splitlines(keepends=keepends)
+
+    def _stat_path(path: str) -> StatPathResult:
+        code = f"""\
+import os
+try:
+    print(repr(os.stat({path!r})))
+except Exception as e:
+    print(f'ERROR: {{e}}')
+"""
+        try:
+            result = manager.exec_code(code, timeout=5.0)
+        except NotConnectedError as e:
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": str(e),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": str(e),
+            }
+
+        if not result.ok:
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": result.stderr.strip() or "stat path failed",
+            }
+
+        text = result.stdout.strip()
+        if text.startswith("ERROR:"):
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": text[len("ERROR:") :].strip(),
+            }
+
+        try:
+            stat_result = ast.literal_eval(text)
+        except Exception:
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": f"unexpected stat output: {text!r}",
+            }
+
+        if not isinstance(stat_result, tuple) or len(stat_result) < 9:
+            return {
+                "ok": False,
+                "path": path,
+                "kind": None,
+                "size_bytes": None,
+                "mode": None,
+                "mtime": None,
+                "error": f"unexpected stat output: {stat_result!r}",
+            }
+
+        mode = stat_result[0] if isinstance(stat_result[0], int) else None
+        size = stat_result[6] if isinstance(stat_result[6], int) else None
+        mtime = stat_result[8] if isinstance(stat_result[8], int) else None
+        return {
+            "ok": True,
+            "path": path,
+            "kind": _kind_from_mode(mode),
+            "size_bytes": size,
+            "mode": mode,
+            "mtime": mtime,
+            "error": None,
+        }
+
+    def _hash_remote_file(path: str, timeout: int, algorithm: str = "sha256") -> HashFileResult:
+        if algorithm.lower() != "sha256":
+            return {
+                "ok": False,
+                "path": path,
+                "algorithm": algorithm,
+                "digest": "",
+                "size_bytes": 0,
+                "error": "unsupported hash algorithm",
+            }
+
+        data, error = _read_file_bytes(path, float(timeout))
+        if error is not None or data is None:
+            return {
+                "ok": False,
+                "path": path,
+                "algorithm": "sha256",
+                "digest": "",
+                "size_bytes": 0,
+                "error": error or "hash file failed",
+            }
+
+        return {
+            "ok": True,
+            "path": path,
+            "algorithm": "sha256",
+            "digest": _compute_sha256(data),
+            "size_bytes": len(data),
+            "error": None,
+        }
+
     @mcp.tool()
     def micropython_list_files(path: str = "/") -> ListFilesResult:
         """
@@ -334,95 +567,7 @@ except Exception as e:
         Args:
             path: 対象パス
         """
-        code = f"""\
-import os
-try:
-    print(repr(os.stat({path!r})))
-except Exception as e:
-    print(f'ERROR: {{e}}')
-"""
-        try:
-            result = manager.exec_code(code, timeout=5.0)
-        except NotConnectedError as e:
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": str(e),
-            }
-        except Exception as e:
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": str(e),
-            }
-
-        if not result.ok:
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": result.stderr.strip() or "stat path failed",
-            }
-
-        text = result.stdout.strip()
-        if text.startswith("ERROR:"):
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": text[len("ERROR:") :].strip(),
-            }
-
-        try:
-            stat_result = ast.literal_eval(text)
-        except Exception:
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": f"unexpected stat output: {text!r}",
-            }
-
-        if not isinstance(stat_result, tuple) or len(stat_result) < 9:
-            return {
-                "ok": False,
-                "path": path,
-                "kind": None,
-                "size_bytes": None,
-                "mode": None,
-                "mtime": None,
-                "error": f"unexpected stat output: {stat_result!r}",
-            }
-
-        mode = stat_result[0] if isinstance(stat_result[0], int) else None
-        size = stat_result[6] if isinstance(stat_result[6], int) else None
-        mtime = stat_result[8] if isinstance(stat_result[8], int) else None
-        return {
-            "ok": True,
-            "path": path,
-            "kind": _kind_from_mode(mode),
-            "size_bytes": size,
-            "mode": mode,
-            "mtime": mtime,
-            "error": None,
-        }
+        return _stat_path(path)
 
     @mcp.tool()
     def micropython_read_file(
@@ -493,7 +638,356 @@ except Exception as e:
         Args:
             timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
         """
-        return micropython_read_file(path=HARDWARE_MD_PATH, timeout=timeout)
+        data, error = _read_file_bytes(HARDWARE_MD_PATH, float(timeout))
+        if error is not None or data is None:
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "content_base64": None,
+                "size_bytes": 0,
+                "error": error or "read file failed",
+            }
+
+        try:
+            content = data.decode("utf-8", errors="strict")
+        except Exception as e:
+            return {
+                "ok": False,
+                "path": HARDWARE_MD_PATH,
+                "content": "",
+                "content_base64": None,
+                "size_bytes": len(data),
+                "error": str(e),
+            }
+
+        return {
+            "ok": True,
+            "path": HARDWARE_MD_PATH,
+            "content": content,
+            "content_base64": None,
+            "size_bytes": len(data),
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_upload_file(
+        local_path: str,
+        remote_path: str,
+        timeout: int = 20,
+        overwrite: bool = True,
+    ) -> UploadFileResult:
+        """
+        ローカルファイルを MicroPython ボードへ転送する。
+
+        Args:
+            local_path: ホスト側ファイルパス
+            remote_path: デバイス側ファイルパス
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+            overwrite: False のとき既存ファイルを上書きしない
+        """
+        data, resolved_local_path, error = _read_local_file_bytes(local_path)
+        local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
+        if error is not None or data is None:
+            return {
+                "ok": False,
+                "local_path": local_path_value,
+                "remote_path": remote_path,
+                "bytes_written": 0,
+                "sha256": None,
+                "error": error or "upload file failed",
+            }
+
+        if not overwrite:
+            stat_result = _stat_path(remote_path)
+            if stat_result["ok"]:
+                return {
+                    "ok": False,
+                    "local_path": local_path_value,
+                    "remote_path": remote_path,
+                    "bytes_written": 0,
+                    "sha256": None,
+                    "error": "remote file already exists",
+                }
+
+        write_result = _write_file_bytes(remote_path, data, mode="wb", timeout=float(timeout))
+        return {
+            "ok": write_result["ok"],
+            "local_path": local_path_value,
+            "remote_path": remote_path,
+            "bytes_written": write_result["bytes_written"],
+            "sha256": _compute_sha256(data) if write_result["ok"] else None,
+            "error": write_result["error"],
+        }
+
+    @mcp.tool()
+    def micropython_download_file(
+        remote_path: str,
+        local_path: str,
+        timeout: int = 20,
+        overwrite: bool = False,
+    ) -> DownloadFileResult:
+        """
+        MicroPython ボード上のファイルをローカルへ保存する。
+
+        Args:
+            remote_path: デバイス側ファイルパス
+            local_path: ホスト側保存先パス
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+            overwrite: False のとき既存ファイルを上書きしない
+        """
+        resolved_local_path, path_error = _ensure_local_workspace_path(local_path)
+        local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
+        if path_error is not None:
+            return {
+                "ok": False,
+                "remote_path": remote_path,
+                "local_path": local_path_value,
+                "bytes_written": 0,
+                "sha256": None,
+                "error": path_error,
+            }
+
+        data, error = _read_file_bytes(remote_path, float(timeout))
+        if error is not None or data is None:
+            return {
+                "ok": False,
+                "remote_path": remote_path,
+                "local_path": local_path_value,
+                "bytes_written": 0,
+                "sha256": None,
+                "error": error or "download file failed",
+            }
+
+        bytes_written, resolved_written_path, write_error = _write_local_file_bytes(local_path, data, overwrite)
+        local_path_value = str(resolved_written_path) if resolved_written_path is not None else local_path_value
+        return {
+            "ok": write_error is None,
+            "remote_path": remote_path,
+            "local_path": local_path_value,
+            "bytes_written": bytes_written,
+            "sha256": _compute_sha256(data) if write_error is None else None,
+            "error": write_error,
+        }
+
+    @mcp.tool()
+    def micropython_hash_file(
+        path: str,
+        algorithm: str = "sha256",
+        timeout: int = 10,
+    ) -> HashFileResult:
+        """
+        MicroPython ボード上のファイルのハッシュを返す。
+
+        Args:
+            path: 対象ファイルパス
+            algorithm: ハッシュアルゴリズム。現状は sha256 のみ
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+        """
+        return _hash_remote_file(path, timeout, algorithm)
+
+    @mcp.tool()
+    def micropython_compare_local_remote(
+        local_path: str,
+        remote_path: str,
+        timeout: int = 10,
+    ) -> CompareLocalRemoteResult:
+        """
+        ローカルファイルとデバイス上のファイルが一致するか確認する。
+
+        Args:
+            local_path: ホスト側ファイルパス
+            remote_path: デバイス側ファイルパス
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+        """
+        local_data, resolved_local_path, local_error = _read_local_file_bytes(local_path)
+        local_path_value = str(resolved_local_path) if resolved_local_path is not None else local_path
+        if local_error is not None or local_data is None:
+            return {
+                "ok": False,
+                "local_path": local_path_value,
+                "remote_path": remote_path,
+                "local_sha256": None,
+                "remote_sha256": None,
+                "same": False,
+                "error": local_error or "compare failed",
+            }
+        local_sha256 = _compute_sha256(local_data)
+
+        remote_hash = _hash_remote_file(remote_path, timeout)
+        if not remote_hash["ok"]:
+            return {
+                "ok": False,
+                "local_path": local_path_value,
+                "remote_path": remote_path,
+                "local_sha256": local_sha256,
+                "remote_sha256": None,
+                "same": False,
+                "error": remote_hash["error"],
+            }
+        remote_sha256 = remote_hash["digest"]
+
+        return {
+            "ok": True,
+            "local_path": local_path_value,
+            "remote_path": remote_path,
+            "local_sha256": local_sha256,
+            "remote_sha256": remote_sha256,
+            "same": local_sha256 == remote_sha256,
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_read_lines(
+        path: str,
+        start_line: int = 1,
+        max_lines: int = 50,
+        timeout: int = 10,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+    ) -> ReadLinesResult:
+        """
+        MicroPython ボード上のテキストファイルを行単位で一部読み出す。
+
+        Args:
+            path: 対象ファイルパス
+            start_line: 1 始まりの開始行番号
+            max_lines: 返却する最大行数
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+            encoding: テキストデコードに使うエンコーディング
+            errors: テキストデコード時のエラー処理
+        """
+        if start_line < 1:
+            return {
+                "ok": False,
+                "path": path,
+                "start_line": start_line,
+                "line_count": 0,
+                "content": "",
+                "eof": False,
+                "error": "start_line must be >= 1",
+            }
+        if max_lines < 1:
+            return {
+                "ok": False,
+                "path": path,
+                "start_line": start_line,
+                "line_count": 0,
+                "content": "",
+                "eof": False,
+                "error": "max_lines must be >= 1",
+            }
+
+        content, _, error = _read_text_file(path, timeout, encoding, errors)
+        if error is not None or content is None:
+            return {
+                "ok": False,
+                "path": path,
+                "start_line": start_line,
+                "line_count": 0,
+                "content": "",
+                "eof": False,
+                "error": error or "read file lines failed",
+            }
+
+        all_lines = _split_lines(content, keepends=True)
+        start_index = start_line - 1
+        selected = all_lines[start_index : start_index + max_lines]
+        return {
+            "ok": True,
+            "path": path,
+            "start_line": start_line,
+            "line_count": len(selected),
+            "content": "".join(selected),
+            "eof": start_index + len(selected) >= len(all_lines),
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_head_lines(
+        path: str,
+        lines: int = 40,
+        timeout: int = 10,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+    ) -> ReadTextExcerptResult:
+        """
+        MicroPython ボード上のテキストファイル先頭の数行を返す。
+
+        Args:
+            path: 対象ファイルパス
+            lines: 返却する最大行数
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+            encoding: テキストデコードに使うエンコーディング
+            errors: テキストデコード時のエラー処理
+        """
+        if lines < 1:
+            return {"ok": False, "path": path, "content": "", "line_count": 0, "truncated": False, "error": "lines must be >= 1"}
+
+        content, _, error = _read_text_file(path, timeout, encoding, errors)
+        if error is not None or content is None:
+            return {
+                "ok": False,
+                "path": path,
+                "content": "",
+                "line_count": 0,
+                "truncated": False,
+                "error": error or "head file failed",
+            }
+
+        all_lines = _split_lines(content, keepends=True)
+        excerpt_lines = all_lines[:lines]
+        return {
+            "ok": True,
+            "path": path,
+            "content": "".join(excerpt_lines),
+            "line_count": len(excerpt_lines),
+            "truncated": len(excerpt_lines) < len(all_lines),
+            "error": None,
+        }
+
+    @mcp.tool()
+    def micropython_tail_lines(
+        path: str,
+        lines: int = 40,
+        timeout: int = 10,
+        encoding: str = "utf-8",
+        errors: str = "strict",
+    ) -> ReadTextExcerptResult:
+        """
+        MicroPython ボード上のテキストファイル末尾の数行を返す。
+
+        Args:
+            path: 対象ファイルパス
+            lines: 返却する最大行数
+            timeout: コード送信から Raw REPL 復帰完了までの全体タイムアウト秒数
+            encoding: テキストデコードに使うエンコーディング
+            errors: テキストデコード時のエラー処理
+        """
+        if lines < 1:
+            return {"ok": False, "path": path, "content": "", "line_count": 0, "truncated": False, "error": "lines must be >= 1"}
+
+        content, _, error = _read_text_file(path, timeout, encoding, errors)
+        if error is not None or content is None:
+            return {
+                "ok": False,
+                "path": path,
+                "content": "",
+                "line_count": 0,
+                "truncated": False,
+                "error": error or "tail file failed",
+            }
+
+        all_lines = _split_lines(content, keepends=True)
+        excerpt_lines = all_lines[-lines:]
+        return {
+            "ok": True,
+            "path": path,
+            "content": "".join(excerpt_lines),
+            "line_count": len(excerpt_lines),
+            "truncated": len(excerpt_lines) < len(all_lines),
+            "error": None,
+        }
 
     @mcp.tool()
     def micropython_write_file(

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import tempfile
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 
 from mcp_micropython.raw_repl import ReplResult
 from mcp_micropython.tools import filesystem
@@ -165,6 +167,140 @@ class FilesystemToolTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("exactly one", result["error"])
+
+    def test_upload_file_reads_local_file_and_returns_hash(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            local_path = Path(temp_dir) / "main.py"
+            local_path.write_text("print('hello')\n", encoding="utf-8")
+            expected_size = len(local_path.read_bytes())
+
+            result = self.mcp.tools["micropython_upload_file"](str(local_path), "/main.py")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["bytes_written"], expected_size)
+        self.assertIsNotNone(result["sha256"])
+
+    def test_download_file_saves_local_workspace_file(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'line1\\nline2\\n'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            local_path = Path(temp_dir) / "downloaded.txt"
+            result = self.mcp.tools["micropython_download_file"]("/main.py", str(local_path))
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(local_path.read_text(encoding="utf-8"), "line1\nline2\n")
+            self.assertEqual(result["bytes_written"], len("line1\nline2\n".encode("utf-8")))
+
+    def test_hash_file_returns_sha256(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'abc'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        result = self.mcp.tools["micropython_hash_file"]("/main.py")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["algorithm"], "sha256")
+        self.assertEqual(
+            result["digest"],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+
+    def test_compare_local_remote_reports_same_content(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'abc'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            local_path = Path(temp_dir) / "same.txt"
+            local_path.write_text("abc", encoding="utf-8")
+
+            result = self.mcp.tools["micropython_compare_local_remote"](str(local_path), "/main.py")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["same"])
+
+    def test_read_lines_returns_numbered_lines(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'a\\nb\\nc\\nd\\n'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        result = self.mcp.tools["micropython_read_lines"]("/main.py", start_line=2, max_lines=2)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["start_line"], 2)
+        self.assertEqual(result["line_count"], 2)
+        self.assertEqual(result["content"], "b\nc\n")
+        self.assertFalse(result["eof"])
+
+    def test_head_lines_returns_first_lines(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'a\\nb\\nc\\n'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        result = self.mcp.tools["micropython_head_lines"]("/main.py", lines=2)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["content"], "a\nb\n")
+        self.assertTrue(result["truncated"])
+
+    def test_head_lines_preserves_blank_lines_in_content(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'a\\nb\\n\\n'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        result = self.mcp.tools["micropython_head_lines"]("/main.py", lines=3)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["line_count"], 3)
+        self.assertEqual(result["content"], "a\nb\n\n")
+        self.assertFalse(result["truncated"])
+
+    def test_tail_lines_returns_last_lines(self) -> None:
+        repl = self.manager.raw_repl_instance
+        repl.queue(
+            ReplResult(stdout="", stderr=""),
+            ReplResult(stdout="b'a\\nb\\nc\\n'\n", stderr=""),
+            ReplResult(stdout="b''\n", stderr=""),
+            ReplResult(stdout="", stderr=""),
+        )
+
+        result = self.mcp.tools["micropython_tail_lines"]("/main.py", lines=2)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["content"], "b\nc\n")
+        self.assertTrue(result["truncated"])
 
     def test_list_files_parses_ilistdir_entries(self) -> None:
         self.manager.set_result(stdout="('boot.py', 32768, 0, 12)\n('lib', 16384, 0)\n")
